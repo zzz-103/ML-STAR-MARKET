@@ -1,0 +1,442 @@
+# 位置: 主入口（滚动训练→打分→评估→因子重要性→生成持仓）| 对应旧入口 /ml_models/xgb_knn_runner_tech.py
+# 输入: 命令行参数（args），核心数据为 df_ml(MultiIndex: date, code, 含 ret_next) 与 df_price(MultiIndex: date, code)
+# 输出: temp_scores/*.parquet（每日分数），xgb_results/*.csv（每日权重），logs/*.log（运行日志），factors_importance/*（因子重要性）
+# 依赖: /ml_models/xgb_config.py 与 /ml_models/model_functions/_01~_16_*.py
+from __future__ import annotations
+
+
+import glob
+import os
+import shutil
+import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+# Add project root to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+from ml_models import xgb_config as cfg
+from ml_models.model_functions._01_cli import parse_args
+from ml_models.model_functions._03_logging_utils import build_logger, log_section, log_data_grid
+from ml_models.model_functions._04_feature_engineering import apply_feature_filters, build_drop_factors
+from ml_models.model_functions._06_data_preprocessing import prepare_dataset
+from ml_models.model_functions._09_scoring import process_single_day_score
+from ml_models.model_functions._11_portfolio import generate_positions_with_buffer
+from ml_models.model_functions._12_factor_importance import compute_factor_importance, save_factor_importance
+from ml_models.model_functions._13_diagnosis import diagnose_factors
+from ml_models.model_functions._14_overfit import run_overfit_check, run_overfit_check_on_panel
+from ml_models.model_functions._15_visualization import build_ascii_report
+from ml_models.model_functions._16_run_params import format_run_params
+from ml_models.model_functions._17_quick_eval import run_quick_evaluation
+
+
+def _attach_derived_defaults(args) -> None:
+    if not hasattr(args, "stock_pool_prefixes"):
+        args.stock_pool_prefixes = cfg.DEFAULT_UNIVERSE["stock_pool_prefixes"]
+    if not hasattr(args, "min_turnover"):
+        args.min_turnover = cfg.DEFAULT_UNIVERSE["min_turnover"]
+    if not hasattr(args, "label_benchmark_method"):
+        args.label_benchmark_method = cfg.DEFAULT_LABEL["label_benchmark_method"]
+
+
+def _auto_enable_overfit_and_quick_eval(args) -> None:
+    if getattr(args, "start_date", None) is None or getattr(args, "end_date", None) is None:
+        return
+    if bool(getattr(args, "diagnose", False)):
+        return
+    if bool(getattr(args, "overfit_check_only", False)) or bool(getattr(args, "quick_eval_only", False)):
+        return
+    if bool(getattr(args, "overfit_check", False)) or bool(getattr(args, "quick_eval", False)):
+        return
+    args.overfit_check = True
+    args.overfit_along = True
+    args.overfit_range = True
+    args.quick_eval = True
+
+
+def extension_hook(stage: str, *, args, df_ml: pd.DataFrame | None, df_price: pd.DataFrame | None, logger, **context) -> None:
+    _ = stage, args, df_ml, df_price, logger, context
+    return
+
+
+def _parse_yyyymmdd(value: str | None, *, name: str) -> pd.Timestamp | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        return pd.to_datetime(s, format="%Y%m%d", errors="raise")
+    except Exception as e:
+        raise ValueError(f"{name} 需为 YYYYMMDD，当前={value!r}") from e
+
+
+def _validate_time_range(args, *, logger) -> tuple[pd.Timestamp | None, pd.Timestamp | None, pd.Timestamp | None]:
+    start_dt = _parse_yyyymmdd(getattr(args, "start_date", None), name="start_date")
+    end_dt = _parse_yyyymmdd(getattr(args, "end_date", None), name="end_date")
+    floor_dt = _parse_yyyymmdd(getattr(args, "train_floor_date", None), name="train_floor_date")
+    if start_dt is not None and end_dt is not None and start_dt > end_dt:
+        raise ValueError(f"start_date({start_dt:%Y%m%d}) 不能晚于 end_date({end_dt:%Y%m%d})")
+    if int(getattr(args, "train_window")) <= 0:
+        raise ValueError("train_window 必须为正整数")
+    if int(getattr(args, "n_workers")) <= 0:
+        raise ValueError("n_workers 必须为正整数")
+    if int(getattr(args, "top_k")) <= 0:
+        raise ValueError("top_k 必须为正整数")
+    if int(getattr(args, "buffer_k")) < int(getattr(args, "top_k")):
+        logger.info("buffer_k < top_k, auto_set buffer_k=%d", int(getattr(args, "top_k")))
+        args.buffer_k = int(getattr(args, "top_k"))
+    return start_dt, end_dt, floor_dt
+
+
+def _prepare_output_dirs(args, logger, clean_save_dir: bool = True) -> tuple[str, str, str]:
+    output_dir = str(getattr(args, "output_dir"))
+    save_dir = os.path.join(output_dir, str(getattr(args, "sub_dir_name")))
+    temp_dir = os.path.join(output_dir, str(getattr(args, "temp_dir_name")))
+    log_dir = os.path.join(output_dir, "logs")
+
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+    os.makedirs(temp_dir, exist_ok=True)
+
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+    elif clean_save_dir:
+        for fp in glob.glob(os.path.join(save_dir, "*.csv")):
+            try:
+                os.remove(fp)
+            except Exception:
+                pass
+
+    logger.info("output save_dir=%s", save_dir)
+    logger.info("output temp_dir=%s", temp_dir)
+    return save_dir, temp_dir, log_dir
+
+
+def _compute_temp_eval(df_ml: pd.DataFrame, temp_dir: str, top_k: int) -> dict[str, pd.Series]:
+    idx = pd.IndexSlice
+    files = sorted(glob.glob(os.path.join(temp_dir, "*.parquet")))
+    ic_rows: dict[pd.Timestamp, float] = {}
+    top_rows: dict[pd.Timestamp, float] = {}
+    for fp in files:
+        date_str = os.path.basename(fp).replace(".parquet", "")
+        d = pd.to_datetime(date_str, format="%Y%m%d", errors="coerce")
+        if pd.isna(d):
+            continue
+        df_s = pd.read_parquet(fp)
+        if "code" not in df_s.columns or "score" not in df_s.columns:
+            continue
+        df_s["code"] = df_s["code"].astype(str)
+        s = df_s.dropna(subset=["code", "score"]).drop_duplicates(subset=["code"]).set_index("code")["score"]
+        if len(s) < max(20, int(top_k)):
+            continue
+        try:
+            y = df_ml.loc[idx[d, s.index.to_list()], "ret_next"]
+        except Exception:
+            continue
+        # Use concat to align indices safely and avoid unorderable warning
+        df = pd.concat([
+            pd.to_numeric(y, errors="coerce").rename("y"),
+            pd.to_numeric(s, errors="coerce").rename("pred")
+        ], axis=1, sort=True).dropna()
+        if len(df) < max(20, int(top_k)):
+            continue
+        ic = df["pred"].corr(df["y"], method="spearman")
+        if ic is not None and np.isfinite(float(ic)):
+            ic_rows[d] = float(ic)
+        sel = df.nlargest(int(top_k), columns="pred")["y"]
+        if len(sel) > 0:
+            m = float(sel.mean())
+            if np.isfinite(m):
+                top_rows[d] = m
+    return {
+        "daily_ic": pd.Series(ic_rows).sort_index(),
+        f"top{int(top_k)}_mean_ret_next": pd.Series(top_rows).sort_index(),
+    }
+
+
+def run(argv: list[str] | None = None) -> None:
+    args = parse_args(argv=argv)
+    _attach_derived_defaults(args)
+    _auto_enable_overfit_and_quick_eval(args)
+
+    log_dir = os.path.join(str(getattr(args, "output_dir")), "logs")
+    logger = build_logger(log_dir=log_dir, run_name="xgb_knn_runner")
+    log_section(logger, "配置参数 (Config)")
+    
+    # Group args for better readability
+    arg_dict = vars(args)
+    groups = {
+        "基础路径 (Paths)": set(cfg.DEFAULT_PATHS.keys()),
+        "股票池/数据 (Universe)": set(cfg.DEFAULT_UNIVERSE.keys()),
+        "标签定义 (Label)": set(cfg.DEFAULT_LABEL.keys()),
+        "训练设置 (Training)": set(cfg.DEFAULT_TRAINING.keys()),
+        "模型参数 (Model)": set(cfg.DEFAULT_MODEL.keys()),
+        "组合风控 (Portfolio)": set(cfg.DEFAULT_PORTFOLIO.keys()),
+        "择时策略 (Timing)": set(cfg.DEFAULT_TIMING.keys()),
+        "诊断 (Diagnose)": set(cfg.DEFAULT_DIAGNOSE.keys()),
+        "过拟合自检 (Overfit)": set(cfg.DEFAULT_OVERFIT.keys()) | {"overfit_check_only"},
+        "快速评估 (QuickEval)": set(cfg.DEFAULT_QUICK_EVAL.keys()) | {"quick_eval_only"},
+    }
+    
+    # Assign args to groups
+    grouped_args = {k: {} for k in groups}
+    grouped_args["其他参数 (Misc)"] = {}
+    
+    assigned_keys = set()
+    for g_name, g_keys in groups.items():
+        for k in g_keys:
+            if k in arg_dict:
+                grouped_args[g_name][k] = arg_dict[k]
+                assigned_keys.add(k)
+                
+    for k, v in arg_dict.items():
+        if k not in assigned_keys:
+            # Special handling for derived or misc args
+            grouped_args["其他参数 (Misc)"][k] = v
+
+    # Print relevant groups (skip empty or disabled features if cleaner)
+    # Always show Paths, Training, Model, Portfolio
+    log_data_grid(logger, grouped_args["基础路径 (Paths)"], "基础路径")
+    log_data_grid(logger, grouped_args["模型参数 (Model)"], "模型参数")
+    log_data_grid(logger, grouped_args["训练设置 (Training)"], "训练设置")
+    log_data_grid(logger, grouped_args["组合风控 (Portfolio)"], "组合风控")
+    
+    # Show others only if relevant or not empty
+    if bool(getattr(args, "diagnose", False)):
+        log_data_grid(logger, grouped_args["诊断 (Diagnose)"], "诊断参数")
+    if bool(getattr(args, "overfit_check", False)) or bool(getattr(args, "overfit_along", False)):
+        log_data_grid(logger, grouped_args["过拟合自检 (Overfit)"], "过拟合参数")
+    if bool(getattr(args, "quick_eval", False)) or bool(getattr(args, "quick_eval_only", False)):
+        log_data_grid(logger, grouped_args["快速评估 (QuickEval)"], "快速评估参数")
+        
+    # Show Timing if enabled
+    if str(getattr(args, "timing_method", "none")) != "none":
+         log_data_grid(logger, grouped_args["择时策略 (Timing)"], "择时参数")
+
+    start_dt, end_dt, floor_dt = _validate_time_range(args, logger=logger)
+
+    if bool(getattr(args, "diagnose", False)):
+        log_section(logger, "因子诊断 (Diagnose)")
+        out_path = diagnose_factors(args)
+        logger.info("诊断报告路径=%s", out_path)
+        return
+
+    if bool(getattr(args, "quick_eval_only", False)):
+        log_section(logger, "快速评估 (QuickEvalOnly)")
+        save_dir, _, _ = _prepare_output_dirs(args, logger=logger, clean_save_dir=False)
+
+        if bool(getattr(args, "overfit_check", False)) or bool(getattr(args, "overfit_check_only", False)):
+            log_section(logger, "过拟合自检 (OverfitCheckOnly)")
+            run_overfit_check(args, logger=logger)
+
+        price_path = str(getattr(args, "price_data_path"))
+        logger.info("步骤: 加载价格数据 path=%s", price_path)
+        if not os.path.exists(price_path):
+            logger.error("错误: 找不到价格数据文件 path=%s", price_path)
+            return
+
+        df_price = pd.read_parquet(price_path).sort_index()
+        prefixes = tuple(getattr(args, "stock_pool_prefixes", cfg.DEFAULT_UNIVERSE["stock_pool_prefixes"]))
+        pool_mask = df_price.index.get_level_values("code").astype(str).str.startswith(prefixes)
+        df_price = df_price.loc[pool_mask, :]
+
+        try:
+            run_quick_evaluation(args=args, save_dir=save_dir, df_price=df_price, logger=logger)
+        except Exception as e:
+            logger.info("快速评估出错: %s", str(e))
+            import traceback
+            logger.info(traceback.format_exc())
+        return
+
+    if bool(getattr(args, "overfit_check_only", False)):
+        log_section(logger, "过拟合自检 (OverfitCheckOnly)")
+        run_overfit_check(args, logger=logger)
+
+        if bool(getattr(args, "quick_eval", False)):
+            log_section(logger, "快速评估 (QuickEval)")
+            save_dir, _, _ = _prepare_output_dirs(args, logger=logger, clean_save_dir=False)
+
+            price_path = str(getattr(args, "price_data_path"))
+            logger.info("步骤: 加载价格数据 path=%s", price_path)
+            if not os.path.exists(price_path):
+                logger.error("错误: 找不到价格数据文件 path=%s", price_path)
+                return
+            df_price = pd.read_parquet(price_path).sort_index()
+            prefixes = tuple(getattr(args, "stock_pool_prefixes", cfg.DEFAULT_UNIVERSE["stock_pool_prefixes"]))
+            pool_mask = df_price.index.get_level_values("code").astype(str).str.startswith(prefixes)
+            df_price = df_price.loc[pool_mask, :]
+
+            try:
+                run_quick_evaluation(args=args, save_dir=save_dir, df_price=df_price, logger=logger)
+            except Exception as e:
+                logger.info("快速评估出错: %s", str(e))
+                import traceback
+
+                logger.info(traceback.format_exc())
+        return
+
+    run_overfit_along = bool(getattr(args, "overfit_check", False)) and bool(getattr(args, "overfit_along", False))
+    if bool(getattr(args, "overfit_check", False)) and not run_overfit_along:
+        log_section(logger, "过拟合自检 (OverfitCheckOnly)")
+        run_overfit_check(args, logger=logger)
+        return
+
+    objective = str(getattr(args, "xgb_objective", "reg:squarederror"))
+    model_kind = "Rank" if objective.startswith("rank:") else "Regression"
+    timing_method = str(getattr(args, "timing_method", "score")).lower()
+    s1, s2 = format_run_params(args, objective=objective, model_kind=model_kind, timing_method=timing_method)
+    log_section(logger, "运行参数 (RunParams)")
+    logger.info("%s", s1)
+    logger.info("%s", s2)
+
+    save_dir, temp_dir, _ = _prepare_output_dirs(args, logger=logger)
+
+    log_section(logger, "数据集处理 (Dataset)")
+    df_ml, df_price = prepare_dataset(args, logger=logger)
+    extension_hook("after_dataset", args=args, df_ml=df_ml, df_price=df_price, logger=logger)
+
+    all_dates = df_ml.index.get_level_values("date").unique().sort_values()
+    raw_features = [c for c in df_ml.columns if c != "ret_next"]
+    drop_factors = build_drop_factors(
+        use_default_drop_factors=bool(getattr(args, "use_default_drop_factors", True)),
+        drop_factors_csv=getattr(args, "drop_factors", None),
+    )
+    final_features = apply_feature_filters(raw_features, drop_factors)
+    log_section(logger, "特征工程 (Features)")
+    logger.info("最终特征数=%d 示例=%s", int(len(final_features)), final_features[:8])
+
+    train_window = int(getattr(args, "train_window"))
+    train_gap = int(getattr(args, "train_gap", cfg.DEFAULT_TRAINING["train_gap"]))
+    predict_dates = all_dates[train_window + train_gap - 1 :]
+    if start_dt is not None:
+        predict_dates = predict_dates[predict_dates >= start_dt]
+    if end_dt is not None:
+        predict_dates = predict_dates[predict_dates <= end_dt]
+    if getattr(args, "max_predict_days", None) is not None:
+        predict_dates = predict_dates[: int(getattr(args, "max_predict_days"))]
+    if len(predict_dates) == 0:
+        logger.info("预测日期为空，跳过运行")
+        return
+    logger.info("预测区间 %s~%s 总天数=%d", predict_dates[0].strftime("%Y%m%d"), predict_dates[-1].strftime("%Y%m%d"), int(len(predict_dates)))
+
+    tasks: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp]] = []
+    all_dates_index = pd.Index(all_dates)
+    n_skip = 0
+    for target_date in predict_dates:
+        pos = int(all_dates_index.get_loc(target_date))
+        if pos < train_window + train_gap - 1:
+            n_skip += 1
+            continue
+        train_end_date = all_dates[pos - train_gap]
+        train_start_date = all_dates[pos - train_gap - train_window + 1]
+        if floor_dt is not None and train_start_date < floor_dt:
+            train_start_date = floor_dt
+        if train_start_date > train_end_date:
+            n_skip += 1
+            continue
+        if not (train_end_date < target_date):
+            n_skip += 1
+            continue
+        tasks.append((target_date, train_start_date, train_end_date))
+    if n_skip:
+        logger.info("跳过任务数=%d (数据不足或日期无效)", int(n_skip))
+    if len(tasks) == 0:
+        logger.info("任务列表为空，跳过运行")
+        return
+
+    log_section(logger, "模型训练与打分 (Scoring)")
+    extension_hook("before_scoring", args=args, df_ml=df_ml, df_price=df_price, logger=logger, tasks=tasks, features=final_features)
+    n_ok = 0
+    n_none = 0
+    n_err = 0
+    err_samples: list[str] = []
+    with ProcessPoolExecutor(max_workers=int(getattr(args, "n_workers"))) as executor:
+        futures = [
+            executor.submit(
+                process_single_day_score,
+                t[0],
+                t[1],
+                t[2],
+                df_ml,
+                df_price,
+                args,
+                final_features,
+                temp_dir,
+            )
+            for t in tasks
+        ]
+        for fut in tqdm(as_completed(futures), total=len(tasks), desc="训练进度"):
+            try:
+                r = fut.result()
+            except Exception as e:
+                n_err += 1
+                if len(err_samples) < 5:
+                    err_samples.append(f"Error: {e}")
+                continue
+            if r is None:
+                n_none += 1
+                continue
+            if isinstance(r, str) and r.startswith("Error:"):
+                n_err += 1
+                if len(err_samples) < 5:
+                    err_samples.append(r)
+                continue
+            n_ok += 1
+    logger.info("打分汇总 成功=%d 空结果=%d 错误=%d", int(n_ok), int(n_none), int(n_err))
+    for s in err_samples:
+        logger.info("打分错误示例 %s", s)
+    extension_hook("after_scoring", args=args, df_ml=df_ml, df_price=df_price, logger=logger, temp_dir=temp_dir)
+
+    log_section(logger, "模型评估 (Evaluation)")
+    eval_map = _compute_temp_eval(df_ml, temp_dir=temp_dir, top_k=int(getattr(args, "top_k")))
+    report = build_ascii_report("临时分数评估 (基于同日ret_next)", eval_map)
+    for line in report.splitlines():
+        logger.info("%s", line)
+    try:
+        out_eval = os.path.join(save_dir, "eval_report.txt")
+        with open(out_eval, "w", encoding="utf-8") as f:
+            f.write(report)
+        logger.info("已保存评估报告=%s", out_eval)
+    except Exception:
+        pass
+
+    log_section(logger, "因子重要性 (FactorImportance)")
+    res = compute_factor_importance(df_ml, all_dates, predict_dates, final_features, args)
+    if res is not None:
+        df_imp, meta = res
+        meta["dropped_factors"] = sorted(list(drop_factors))
+        save_factor_importance(df_imp, meta, args, logger=logger)
+    else:
+        logger.info("跳过因子重要性计算")
+
+    log_section(logger, "组合构建 (Portfolio)")
+    generate_positions_with_buffer(args, temp_dir=temp_dir, save_dir=save_dir, df_price=df_price, logger=logger)
+
+    if run_overfit_along:
+        log_section(logger, "伴随过拟合自检 (OverfitAlong)")
+        if (not bool(getattr(args, "overfit_range", False))) and getattr(args, "start_date", None) and getattr(args, "end_date", None):
+            args.overfit_range = True
+        prior_target = getattr(args, "overfit_target_date", None)
+        try:
+            if (not bool(getattr(args, "overfit_range", False))) and (not prior_target):
+                args.overfit_target_date = predict_dates[-1].strftime("%Y%m%d")
+            run_overfit_check_on_panel(args, df_ml=df_ml, logger=logger)
+        finally:
+            args.overfit_target_date = prior_target
+
+    if bool(getattr(args, "quick_eval", False)):
+        log_section(logger, "快速评估 (QuickEval)")
+        try:
+            run_quick_evaluation(args=args, save_dir=save_dir, df_price=df_price, logger=logger)
+        except Exception as e:
+            logger.info("快速评估出错 %s", str(e))
+    log_section(logger, "运行结束 (Done)")
+
+
+if __name__ == "__main__":
+    run()

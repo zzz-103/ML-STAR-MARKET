@@ -22,7 +22,6 @@ DEFAULT_PATHS = {
     "factor_data_path": "factors_data/all_factors_with_fundamentals.parquet",
     "price_data_path": "pre_data/cleaned_stock_data_300_688_with_idxstk.parquet",
     "risk_data_path": "pre_data/merged_20200101_20241231.csv",
-    "industry_map_path": "data_preprocess/industry_map.json",
     "output_dir": "ml_results",
     "sub_dir_name": "xgb_results_gem_star_momo",
     "temp_dir_name": "temp_scores_gem_star_momo",
@@ -79,18 +78,6 @@ DEFAULT_PORTFOLIO = {
     "min_weight": 0.0005,
     "non_rebalance_action": "empty",
     "limit_policy": "freeze",
-    "industry_enable": True,
-    "industry_mom_window": 20,
-    "industry_rank_strong_pct": 0.2,
-    "industry_rank_weak_pct": 0.2,
-    "industry_strong_max_count": 8,
-    "industry_neutral_max_count": 5,
-    "industry_weak_max_count": 2,
-    "industry_unknown_max_count": 2,
-    "industry_min_industries": 4,
-    "industry_ma_window": 20,
-    "industry_ma_riskoff_buffer": 0.01,
-    "industry_riskoff_policy": "ban_new",
 }
 
 DEFAULT_TIMING = {

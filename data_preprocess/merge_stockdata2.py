@@ -549,7 +549,7 @@ def load_idx_idxstk_as_df(
         df["date"] = df["Idxstk01"].map(_parse_date_any)
 
         mask = df["code"].astype(str).str.startswith(prefixes)
-        df = df.loc[mask, :]
+        df = df.loc[mask, :].copy()
 
         for c in ("Idxstk02", "Idxstk03", "Idxstk06", "Idxstk07"):
             if c in df.columns:
@@ -615,11 +615,11 @@ def load_stk_mkt_dalyr_as_df(
             chunk["code"] = chunk["Symbol"].map(_normalize_code)
             chunk["date"] = chunk["TradingDate"].map(_parse_date_any)
             chunk = chunk.dropna(subset=["date", "code"])
-            chunk = chunk[chunk["code"].astype(str).str.startswith(prefixes)]
+            chunk = chunk.loc[chunk["code"].astype(str).str.startswith(prefixes), :].copy()
             if start_dt is not None:
-                chunk = chunk[chunk["date"] >= start_dt]
+                chunk = chunk.loc[chunk["date"] >= start_dt, :].copy()
             if end_dt is not None:
-                chunk = chunk[chunk["date"] <= end_dt]
+                chunk = chunk.loc[chunk["date"] <= end_dt, :].copy()
             if len(chunk) == 0:
                 continue
 
@@ -701,11 +701,11 @@ def load_fi_t10_as_df(
             chunk["code"] = chunk["Stkcd"].map(_normalize_code)
             chunk["date"] = chunk["Accper"].map(_parse_date_any)
             chunk = chunk.dropna(subset=["date", "code"])
-            chunk = chunk[chunk["code"].astype(str).str.startswith(prefixes)]
+            chunk = chunk.loc[chunk["code"].astype(str).str.startswith(prefixes), :].copy()
             if start_dt is not None:
-                chunk = chunk[chunk["date"] >= start_dt]
+                chunk = chunk.loc[chunk["date"] >= start_dt, :].copy()
             if end_dt is not None:
-                chunk = chunk[chunk["date"] <= end_dt]
+                chunk = chunk.loc[chunk["date"] <= end_dt, :].copy()
             if len(chunk) == 0:
                 continue
 
@@ -753,11 +753,11 @@ def load_shuangchuang_as_df(
         df["code"] = df["instrument"].map(_normalize_code)
         df["date"] = df["date"].map(_parse_date_any)
         df = df.dropna(subset=["date", "code"])
-        df = df[df["code"].astype(str).str.startswith(prefixes)]
+        df = df.loc[df["code"].astype(str).str.startswith(prefixes), :].copy()
         if start_dt is not None:
-            df = df[df["date"] >= start_dt]
+            df = df.loc[df["date"] >= start_dt, :].copy()
         if end_dt is not None:
-            df = df[df["date"] <= end_dt]
+            df = df.loc[df["date"] <= end_dt, :].copy()
         if len(df) == 0:
             continue
 

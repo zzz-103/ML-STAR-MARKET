@@ -13,15 +13,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from ml_models.model_functions._05_weights import apply_max_weight_cap
-from ml_models.model_functions._07_risk_signals import (
-    attach_industry_to_price,
-    build_sector_index,
-    compute_sector_daily_returns,
-    compute_sector_momentum_rank,
-    load_index_dual_ma_risk_signal,
-    load_index_ma_risk_signal,
-    load_stock_industry_map,
-)
+from ml_models.model_functions._07_risk_signals import load_index_dual_ma_risk_signal, load_index_ma_risk_signal
 
 
 def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price: pd.DataFrame, logger: logging.Logger) -> None:
@@ -78,36 +70,6 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             if risk_df is None or len(risk_df) == 0:
                 logger.info("risk_data_missing timing_fallback=none method=index_ma_dual")
                 timing_method = "none"
-
-    industry_enabled = bool(getattr(args, "industry_enable", False))
-    code_to_industry: dict[str, str] = {}
-    industry_rank_pct_df: pd.DataFrame | None = None
-    industry_risk_off_df: pd.DataFrame | None = None
-    if industry_enabled:
-        industry_map_path = str(getattr(args, "industry_map_path", "")).strip()
-        code_to_industry = load_stock_industry_map(industry_map_path)
-        try:
-            df_price = attach_industry_to_price(df_price, code_to_industry)
-            mom_window = int(getattr(args, "industry_mom_window", 20))
-            ma_window = int(getattr(args, "industry_ma_window", 20))
-            riskoff_buf = float(getattr(args, "industry_ma_riskoff_buffer", 0.01))
-
-            start_dt = pd.to_datetime(start_s, format="%Y%m%d", errors="coerce")
-            end_dt = pd.to_datetime(end_s, format="%Y%m%d", errors="coerce")
-            if (not pd.isna(start_dt)) and (not pd.isna(end_dt)) and mom_window > 0 and ma_window > 0:
-                need_days = max(120, int(mom_window * 4), int(ma_window * 4))
-                need_start_dt = (start_dt - pd.Timedelta(days=need_days)).strftime("%Y%m%d")
-                sector_ret = compute_sector_daily_returns(df_price, start_date=need_start_dt, end_date=end_s)
-                sector_idx = build_sector_index(sector_ret)
-                _, rank_pct = compute_sector_momentum_rank(sector_idx, window=mom_window)
-                industry_rank_pct_df = rank_pct.shift(1)
-                ma = sector_idx.rolling(window=ma_window, min_periods=ma_window).mean()
-                risk_off = (sector_idx < (ma * (1.0 - riskoff_buf))).astype("float64")
-                industry_risk_off_df = risk_off.shift(1).fillna(0.0).astype("float64")
-            else:
-                industry_enabled = False
-        except Exception:
-            industry_enabled = False
 
     prev_w = pd.Series(dtype="float64")
     yesterday_holding_list: list[str] = []
@@ -260,77 +222,14 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 adj_scores.loc[keep_idx] = adj_scores.loc[keep_idx] * float(getattr(args, "inertia_ratio"))
         ranked_adj_codes = adj_scores.sort_values(ascending=False).index.to_numpy()
 
-        prev_syms = set(prev_w.index.astype(str).tolist())
-        industry_rank_row = None
-        industry_risk_off_row = None
-        if industry_enabled and industry_rank_pct_df is not None and target_date in industry_rank_pct_df.index:
-            try:
-                industry_rank_row = industry_rank_pct_df.loc[target_date, :]
-            except Exception:
-                industry_rank_row = None
-        if industry_enabled and industry_risk_off_df is not None and target_date in industry_risk_off_df.index:
-            try:
-                industry_risk_off_row = industry_risk_off_df.loc[target_date, :]
-            except Exception:
-                industry_risk_off_row = None
-
-        strong_pct = float(getattr(args, "industry_rank_strong_pct", 0.2))
-        weak_pct = float(getattr(args, "industry_rank_weak_pct", 0.2))
-        strong_thr = 1.0 - max(0.0, min(1.0, strong_pct))
-        weak_thr = max(0.0, min(1.0, weak_pct))
-        strong_max = int(getattr(args, "industry_strong_max_count", 8))
-        neutral_max = int(getattr(args, "industry_neutral_max_count", 5))
-        weak_max = int(getattr(args, "industry_weak_max_count", 2))
-        unknown_max = int(getattr(args, "industry_unknown_max_count", 2))
-        min_industries = int(getattr(args, "industry_min_industries", 4))
-        riskoff_policy = str(getattr(args, "industry_riskoff_policy", "ban_new")).lower()
-
-        def _industry_of(code: str) -> str:
-            if not industry_enabled:
-                return "Unknown"
-            c = str(code)
-            ind = code_to_industry.get(c, "Unknown")
-            ind = str(ind).strip()
-            return ind if ind else "Unknown"
-
-        def _is_risk_off(industry: str) -> bool:
-            if industry_risk_off_row is None:
-                return False
-            try:
-                v = industry_risk_off_row.get(industry, 0.0)
-                return bool(float(v) >= 0.5)
-            except Exception:
-                return False
-
-        def _quota(industry: str) -> int:
-            if not industry_enabled:
-                return int(getattr(args, "top_k"))
-            if industry == "Unknown":
-                return max(0, int(unknown_max))
-            if industry_rank_row is None:
-                return max(0, int(neutral_max))
-            try:
-                rp = float(industry_rank_row.get(industry, np.nan))
-            except Exception:
-                rp = np.nan
-            if np.isfinite(rp):
-                if rp >= strong_thr:
-                    return max(0, int(strong_max))
-                if rp <= weak_thr:
-                    return max(0, int(weak_max))
-            return max(0, int(neutral_max))
-
         target_selected: list[str] = []
         target_set: set[str] = set()
-        industry_count: dict[str, int] = {}
         if len(prev_w) > 0:
             top_buffer = set(ranked_adj_codes[: int(getattr(args, "buffer_k"))])
             for code in yesterday_holding_list:
                 if code in top_buffer:
                     target_selected.append(code)
                     target_set.add(code)
-                    ind = _industry_of(code)
-                    industry_count[ind] = int(industry_count.get(ind, 0)) + 1
 
         slots = int(getattr(args, "top_k")) - len(target_selected)
         if slots > 0:
@@ -339,83 +238,13 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                     break
                 if code in target_set:
                     continue
-                ind = _industry_of(code)
-                is_new = str(code) not in prev_syms
-                if industry_enabled and _is_risk_off(ind):
-                    if riskoff_policy == "ban_all":
-                        continue
-                    if riskoff_policy == "ban_new" and is_new:
-                        continue
-                q = _quota(ind)
-                if industry_enabled and int(industry_count.get(ind, 0)) >= int(q):
-                    continue
                 target_selected.append(code)
                 target_set.add(code)
-                industry_count[ind] = int(industry_count.get(ind, 0)) + 1
                 slots -= 1
 
         target_codes = target_selected[: int(getattr(args, "top_k"))]
 
-        if industry_enabled and min_industries > 0:
-            ind_set = set(_industry_of(c) for c in target_codes)
-            if len(ind_set) < min_industries:
-                need = int(min_industries - len(ind_set))
-                rank_pos = {str(c): int(i) for i, c in enumerate(ranked_adj_codes)}
-                best_code_for_ind: dict[str, str] = {}
-                for c in ranked_adj_codes:
-                    c = str(c)
-                    if c in target_set:
-                        continue
-                    ind = _industry_of(c)
-                    if ind in ind_set or ind in best_code_for_ind:
-                        continue
-                    is_new = c not in prev_syms
-                    if _is_risk_off(ind):
-                        if riskoff_policy == "ban_all":
-                            continue
-                        if riskoff_policy == "ban_new" and is_new:
-                            continue
-                    if int(industry_count.get(ind, 0)) >= int(_quota(ind)):
-                        continue
-                    best_code_for_ind[ind] = c
-                    if len(best_code_for_ind) >= need:
-                        break
-
-                if len(best_code_for_ind) > 0:
-                    removable = sorted(
-                        [str(c) for c in target_codes],
-                        key=lambda c: ((c in prev_syms), -int(rank_pos.get(str(c), 1_000_000))),
-                    )
-                    for ind, add_code in list(best_code_for_ind.items()):
-                        if len(ind_set) >= min_industries or len(removable) == 0:
-                            break
-                        if add_code in target_set:
-                            continue
-                        if int(industry_count.get(ind, 0)) >= int(_quota(ind)):
-                            continue
-                        drop_code = None
-                        while len(removable) > 0:
-                            cand = removable.pop(0)
-                            if cand in target_set:
-                                drop_code = cand
-                                break
-                        if drop_code is None:
-                            break
-                        drop_ind = _industry_of(drop_code)
-                        try:
-                            target_selected.remove(drop_code)
-                        except ValueError:
-                            continue
-                        target_set.discard(drop_code)
-                        industry_count[drop_ind] = max(0, int(industry_count.get(drop_ind, 0)) - 1)
-                        target_selected.append(add_code)
-                        target_set.add(add_code)
-                        industry_count[ind] = int(industry_count.get(ind, 0)) + 1
-                        ind_set.add(ind)
-
-                target_codes = target_selected[: int(getattr(args, "top_k"))]
-
-        codes_check = set(target_codes) | prev_syms
+        codes_check = set(target_codes) | set(prev_w.index.astype(str).tolist())
         buyable = pd.Series(False, index=pd.Index(sorted(codes_check), dtype="string"))
         try:
             price_today = df_price.loc[idx[target_date, list(buyable.index)], :]
@@ -442,6 +271,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         except Exception:
             pass
 
+        prev_syms = set(prev_w.index.astype(str).tolist())
         fixed_force: set[str] = set()
         if str(getattr(args, "limit_policy", "freeze")).lower() == "freeze":
             fixed_force |= {c for c in prev_syms if c in buyable.index and (not bool(buyable.loc[c]))}

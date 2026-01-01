@@ -17,7 +17,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--factor-data-path", default=cfg.DEFAULT_PATHS["factor_data_path"])
     parser.add_argument("--price-data-path", default=cfg.DEFAULT_PATHS["price_data_path"])
     parser.add_argument("--risk-data-path", default=cfg.DEFAULT_PATHS["risk_data_path"])
-    parser.add_argument("--industry-map-path", default=cfg.DEFAULT_PATHS.get("industry_map_path", "data_preprocess/industry_map.json"))
     parser.add_argument("--output-dir", default=cfg.DEFAULT_PATHS["output_dir"])
     parser.add_argument("--sub-dir-name", default=cfg.DEFAULT_PATHS["sub_dir_name"])
     parser.add_argument("--temp-dir-name", default=cfg.DEFAULT_PATHS["temp_dir_name"])
@@ -63,18 +62,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-weight", type=float, default=cfg.DEFAULT_PORTFOLIO["min_weight"])
     parser.add_argument("--non-rebalance-action", choices=["empty", "carry"], default=cfg.DEFAULT_PORTFOLIO["non_rebalance_action"])
     parser.add_argument("--limit-policy", choices=["freeze", "sell_only"], default=cfg.DEFAULT_PORTFOLIO["limit_policy"])
-    parser.add_argument("--industry-enable", action=argparse.BooleanOptionalAction, default=cfg.DEFAULT_PORTFOLIO.get("industry_enable", False))
-    parser.add_argument("--industry-mom-window", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_mom_window", 20))
-    parser.add_argument("--industry-rank-strong-pct", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_rank_strong_pct", 0.2))
-    parser.add_argument("--industry-rank-weak-pct", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_rank_weak_pct", 0.2))
-    parser.add_argument("--industry-strong-max-count", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_strong_max_count", 8))
-    parser.add_argument("--industry-neutral-max-count", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_neutral_max_count", 5))
-    parser.add_argument("--industry-weak-max-count", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_weak_max_count", 2))
-    parser.add_argument("--industry-unknown-max-count", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_unknown_max_count", 2))
-    parser.add_argument("--industry-min-industries", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_min_industries", 4))
-    parser.add_argument("--industry-ma-window", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_ma_window", 20))
-    parser.add_argument("--industry-ma-riskoff-buffer", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_ma_riskoff_buffer", 0.01))
-    parser.add_argument("--industry-riskoff-policy", choices=["ban_new", "ban_all"], default=cfg.DEFAULT_PORTFOLIO.get("industry_riskoff_policy", "ban_new"))
 
     parser.add_argument("--timing-method", choices=["index_ma20", "index_ma_dual", "score", "none"], default=cfg.DEFAULT_TIMING["timing_method"])
     parser.add_argument("--timing-threshold", type=float, default=cfg.DEFAULT_TIMING["timing_threshold"])
@@ -144,14 +131,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """解析命令行参数；argv=None 表示直接读取 sys.argv。"""
     parser = build_arg_parser()
     args = parser.parse_args(args=argv)
-    for k in (
-        "factor_data_path",
-        "price_data_path",
-        "risk_data_path",
-        "industry_map_path",
-        "output_dir",
-        "factors_importance_dir",
-    ):
+    for k in ("factor_data_path", "price_data_path", "risk_data_path", "output_dir", "factors_importance_dir"):
         if hasattr(args, k):
             setattr(args, k, cfg.resolve_path(getattr(args, k)))
     return args
