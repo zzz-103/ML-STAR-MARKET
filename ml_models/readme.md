@@ -80,10 +80,11 @@ graph TD
 
 - **股票池**：仅保留代码前缀为 `300`（创业板）与 `688`（科创板）的股票。
 - **特征**：读取本地因子面板（MultiIndex：`date, code`），对每只股票做 `shift(1)`，避免未来函数。
-- **标签（Label）**：计算复合未来收益（开盘买入口径）`ret_next_raw = 0.5*ret_5d + 0.5*ret_10d`，再减去同日基准（默认：**可交易股票池的横截面中位数**）得到超额收益 `ret_next`。
+- **标签（Label）**：计算未来 **5 个交易日**开盘买入口径收益 `ret_next_raw = (open_{t+5} - open_t) / open_t`，再减去同日基准（默认：**可交易股票池的横截面中位数**）得到超额收益 `ret_next`。
 - **训练方式**：对每个交易日滚动用过去 `train_window` 天训练一次，输出当天全股票池的预测分数。
 - **持仓生成**：对预测分数做 `smooth_window` 日均值平滑，用“TopK 买入 / TopBuffer 持有”缓冲区 + 惯性因子 + 调仓周期控制换手，并输出逐日权重 CSV。
 - **可交易过滤（用于标签/候选过滤）**：要求 `open>0`；若存在 `upper_limit` 则要求 `open<upper_limit`（避免涨停不可买）；若存在 `turnover_prev` 则要求 `turnover_prev > 1500万`。
+- **行业模块（可选）**：在组合构建阶段对候选名单做行业层面的“禁新/配额/风控”，防止单行业过度集中；可用 `--no-industry-enable` 一键关闭。
 
 ---
 
@@ -140,6 +141,34 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
   --quick-eval
 ```
 
+如果你希望关闭行业相关逻辑（不做行业配额/行业风控），可以加：
+
+```bash
+python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
+  --start-date 20230101 \
+  --end-date 20241231 \
+  --n-workers 8 \
+  --quick-eval \
+  --no-industry-enable
+```
+
+### 行业模块（可选）
+
+行业相关逻辑发生在 [ _11_portfolio.py](file:///Users/zhuzhuxia/Documents/SZU_w4/ml_models/model_functions/_11_portfolio.py) 的组合构建阶段，核心目标是：在“已选股”的前提下，做行业层面的资金与风险敞口管理。
+
+- **Risk-Off 行业禁新**：当某行业处于 Risk-Off 状态时，对该行业执行 `ban_new`（不允许新增该行业仓位），避免逆势加仓。
+- **行业配额/分散度**：按行业强弱分组分配名额，并尽量保证至少覆盖 `industry_min_industries` 个行业（默认 4）。
+- **单行业权重硬顶**：若某行业总权重超过 `industry_max_weight`（默认 0.30），该行业内权重按比例缩放，削减部分直接转为现金（降低总仓位）。
+- **Risk-Off 持仓降权**：对 Risk-Off 行业的“老持仓”按 `industry_riskoff_weight_scale`（默认 0.5）缩放，降低风险暴露但不强制清仓。
+
+常用参数（均可 `--help` 查看；默认值在 [xgb_config.py](file:///Users/zhuzhuxia/Documents/SZU_w4/ml_models/xgb_config.py)）：
+
+- 开关：`--industry-enable / --no-industry-enable`
+- 行业映射：`--industry-map-path`
+- 信号窗口：`--industry-mom-window`、`--industry-ma-window`、`--industry-ma-riskoff-buffer`
+- 风控参数：`--industry-max-weight`、`--industry-riskoff-weight-scale`、`--industry-riskoff-policy`
+- 分组配额：`--industry-strong-max-count`、`--industry-neutral-max-count`、`--industry-weak-max-count`、`--industry-unknown-max-count`
+
 运行输出示例（部分）：
 ```text
 [配置参数]
@@ -149,6 +178,49 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
 ┌── 模型参数
 │ n_estimators: 200   learning_rate: 0.01   max_depth: 4
 ...
+```
+
+运行输出示例（参数汇总片段，关闭行业 enable；终端仅展示每组前几行，完整参数见 log_file）：
+```text
+(SZU_w4) zhuzhuxia@zhuzhuxiadeMacBook-Pro SZU_w4 % python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
+  --start-date 20230101 \
+  --end-date 20241231 \
+  --no-industry-enable
+log_file=/Users/zhuzhuxia/Documents/SZU_w4/ml_results/logs/xgb_knn_runner_20260102_010225.log
+[01:02:25] ========== 配置参数 (Config) ==========
+┌── 基础路径
+│ factor_data_path: /Users/zhuzhuxia/Documents/SZU_w4/factors_data/...
+│ factors_importance_dir: /Users/zhuzhuxia/Documents/SZU_w4/ml_results/...
+│ industry_map_path: /Users/zhuzhuxia/Documents/SZU_w4/data_preprocess/...
+│ ... (省略3行，详见日志文件)
+┌── 模型参数
+│ blend_knn_weight: 0.3   blend_xgb_weight: 0.7   knn_neighbors: 50   learning_rate: 0.01
+│ max_depth: 4   n_estimators: 200   reg_lambda: 10.0   subsample: 0.7   use_constraints: True
+│ ... (省略1行，详见日志文件)
+┌── 训练设置
+│ decay_anchor_days: 30   decay_half_life_days: 60   decay_min_weight: 0.1
+│ dropna_features: False   n_workers: 10   sample_weight_mode: time_decay_exp   train_gap: 6
+│ ... (省略1行，详见日志文件)
+┌── 组合风控
+│ band_threshold: 0.001   buffer_k: 30   emergency_exit_rank: 50   industry_enable: False
+│ industry_ma_riskoff_buffer: 0.01   industry_ma_window: 20   industry_max_weight: 0.3
+│ ... (省略4行，详见日志文件)
+┌── 择时参数
+│ risk_index_code: 399006   risk_ma_buffer: 0.005   risk_ma_fast_window: 5
+│ risk_ma_slow_window: 20   risk_ma_window: 20   timing_bad_exposure: 0.4
+│ ... (省略1行，详见日志文件)
+[01:02:25] ========== 数据集处理 (Dataset) ==========
+step=load_factors path=/Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_with_fundamentals.parquet
+泄漏检查 gap=6 | 标签最远=+5日 | 安全gap>=6 | 风险=0 | 最贴近标签点=target-1 (train_end+5)
+步骤: 特征平移 shift=1
+步骤: 加载价格数据 path=/Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk.parquet
+步骤: 构建标签 label=5日收益
+步骤: 合并特征与标签 (Inner Join)
+数据集样本数=1355256
+数据集日期范围=20200228~20241224 (end_date=20241231)
+[01:02:28] ========== 特征工程 (Features) ==========
+最终特征数=32 示例=['boll_pct_b', 'boll_width', 'breakout_20', 'breakout_20_vol_confirm', 'breakout_60', 'breakout_60_vol_confirm', 'candle_body', 'hl_ratio']
+预测区间 20230103~20241224 总天数=479
 ```
 
 如果你只想快速验证流程是否跑通：

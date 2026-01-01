@@ -90,6 +90,13 @@ def _validate_time_range(args, *, logger) -> tuple[pd.Timestamp | None, pd.Times
     if int(getattr(args, "buffer_k")) < int(getattr(args, "top_k")):
         logger.info("buffer_k < top_k, auto_set buffer_k=%d", int(getattr(args, "top_k")))
         args.buffer_k = int(getattr(args, "top_k"))
+    train_gap = int(getattr(args, "train_gap", cfg.DEFAULT_TRAINING["train_gap"]))
+    if train_gap <= 0:
+        raise ValueError("train_gap 必须为正整数")
+    label_horizon = int(cfg.DEFAULT_LABEL.get("predict_days", 5))
+    safe_gap_min = int(label_horizon + 1)
+    if train_gap < safe_gap_min:
+        raise ValueError(f"train_gap({train_gap}) 过小：标签最远需要 t+{label_horizon}，为避免穿越需 train_gap>={safe_gap_min}")
     return start_dt, end_dt, floor_dt
 
 

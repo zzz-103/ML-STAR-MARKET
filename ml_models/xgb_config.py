@@ -20,7 +20,7 @@ def resolve_path(path: str) -> str:
 
 DEFAULT_PATHS = {
     "factor_data_path": "factors_data/all_factors_with_fundamentals.parquet",
-    "price_data_path": "pre_data/cleaned_stock_data_300_688_with_idxstk.parquet",
+    "price_data_path": "pre_data/cleaned_stock_data_300_688_with_idxstk_with_industry.parquet",
     "risk_data_path": "pre_data/merged_20200101_20241231.csv",
     "industry_map_path": "data_preprocess/industry_map.json",
     "output_dir": "ml_results",

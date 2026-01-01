@@ -431,7 +431,10 @@ def get_data():
     if os.path.exists(CLEANED_DATA_PATH):
         print(f"[{datetime.now().time()}] ✅ 发现缓存文件，直接读取: {CLEANED_DATA_PATH}")
         try:
-            return pd.read_parquet(CLEANED_DATA_PATH)
+            df = pd.read_parquet(CLEANED_DATA_PATH)
+            if not isinstance(df.index, pd.MultiIndex) or set(df.index.names) != {"date", "code"}:
+                raise ValueError(f"缓存数据索引必须包含 date/code: {CLEANED_DATA_PATH}")
+            return df.sort_index()
         except Exception as e:
             print(f"❌ 缓存损坏 ({e})，重新清洗。")
 

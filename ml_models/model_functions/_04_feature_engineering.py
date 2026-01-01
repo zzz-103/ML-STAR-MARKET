@@ -21,9 +21,12 @@ def apply_feature_filters(features: list[str], drop_factors: set[str]) -> list[s
     """对特征列表应用剔除规则（drop list + turnover_* 特殊规则）。"""
     out: list[str] = []
     for f in features:
-        if f in drop_factors:
+        sf = str(f)
+        if sf in drop_factors:
             continue
-        if str(f).startswith("turnover_") and str(f) != "turnover_bias_5":
+        if ("ret_next" in sf) or sf.endswith("_next"):
+            continue
+        if sf.startswith("turnover_") and sf != "turnover_bias_5":
             continue
         out.append(f)
     return out

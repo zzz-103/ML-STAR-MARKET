@@ -69,8 +69,8 @@ def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.Data
 
     end_dt = _parse_yyyymmdd(getattr(args, "end_date", None))
     train_gap = int(getattr(args, "train_gap", cfg.DEFAULT_TRAINING.get("train_gap", 6)))
-    label_horizon_max = 5
-    safe_gap_min = label_horizon_max + 1
+    label_horizon_max = int(cfg.DEFAULT_LABEL.get("predict_days", 5))
+    safe_gap_min = int(label_horizon_max + 1)
     leak_margin = int(train_gap - label_horizon_max)
     risk = int(train_gap < safe_gap_min)
     logger.info(
@@ -82,6 +82,8 @@ def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.Data
         int(leak_margin),
         int(label_horizon_max),
     )
+    if bool(risk):
+        raise ValueError(f"train_gap({train_gap}) 过小：标签最远需要 t+{label_horizon_max}，为避免穿越需 train_gap>={safe_gap_min}")
 
     logger.info("步骤: 特征平移 shift=1")
     df_factors_shifted = df_factors.groupby(level="code").shift(1)
@@ -90,16 +92,20 @@ def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.Data
     df_price = pd.read_parquet(price_path).sort_index()
     pool_mask_p = df_price.index.get_level_values("code").astype(str).str.startswith(prefixes)
     df_price = df_price.loc[pool_mask_p, :]
+    if end_dt is not None:
+        idx = pd.IndexSlice
+        df_factors_shifted = df_factors_shifted.loc[idx[:end_dt, :], :]
+        df_price = df_price.loc[idx[:end_dt, :], :]
 
     if "turnover" in df_price.columns:
         df_price["turnover_prev"] = df_price.groupby(level="code")["turnover"].shift(1)
     if "volume" in df_price.columns:
         df_price["volume_prev"] = df_price.groupby(level="code")["volume"].shift(1)
 
-    logger.info("步骤: 构建标签 label=5日收益")
+    logger.info("步骤: 构建标签 label=%d日收益", int(label_horizon_max))
     current_open = df_price["open"].replace(0, np.nan)
-    ret_5d = (df_price.groupby(level="code")["open"].shift(-5) - current_open) / current_open
-    df_price["ret_next_raw"] = ret_5d
+    ret = (df_price.groupby(level="code")["open"].shift(-int(label_horizon_max)) - current_open) / current_open
+    df_price["ret_next_raw"] = ret
 
     min_turnover = float(getattr(args, "min_turnover", cfg.DEFAULT_UNIVERSE["min_turnover"]))
     tradable_t = build_tradable_mask(df_price, min_turnover=min_turnover)

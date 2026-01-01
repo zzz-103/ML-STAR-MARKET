@@ -23,6 +23,27 @@ class ConsoleFormatter(logging.Formatter):
         return f"[{record.levelname}] {record.getMessage()}"
 
 
+def _is_console_handler(h: logging.Handler) -> bool:
+    return isinstance(h, logging.StreamHandler) and (not isinstance(h, logging.FileHandler))
+
+
+def _is_file_handler(h: logging.Handler) -> bool:
+    return isinstance(h, logging.FileHandler)
+
+
+def _emit_line(logger: logging.Logger, h: logging.Handler, line: str) -> None:
+    record = logger.makeRecord(
+        name=logger.name,
+        level=logging.INFO,
+        fn="",
+        lno=0,
+        msg=line,
+        args=(),
+        exc_info=None,
+    )
+    h.handle(record)
+
+
 def build_logger(log_dir: str, run_name: str) -> logging.Logger:
     """创建同时输出到终端与文件的 INFO 级日志器（时间戳精确到毫秒）。"""
     os.makedirs(log_dir, exist_ok=True)
@@ -82,14 +103,11 @@ def log_data_grid(logger: logging.Logger, data: dict, title: str = "Config") -> 
             s_v = s_v[:47] + "..."
         items.append(f"{k}: {s_v}")
 
-    # Simple column layout
-    lines = []
-    lines.append(f"┌── {title}")
-    
-    # Try to fit 2-3 items per line depending on length
-    current_line = []
+    lines: list[str] = [f"┌── {title}"]
+
+    current_line: list[str] = []
     current_len = 0
-    max_width = 100  # Conservative terminal width
+    max_width = 100
 
     for item in items:
         if current_len + len(item) + 4 > max_width:
@@ -100,13 +118,27 @@ def log_data_grid(logger: logging.Logger, data: dict, title: str = "Config") -> 
         else:
             current_line.append(item)
             current_len += len(item) + 4
-    
+
     if current_line:
         lines.append("│ " + "   ".join(current_line))
 
-    # lines.append("└" + "─" * 40) # Optional closing line, keeping it clean
+    max_console_lines = 4
+    if len(lines) <= max_console_lines:
+        console_lines = lines
+    else:
+        kept = max(1, max_console_lines - 1)
+        omitted = max(0, len(lines) - kept)
+        console_lines = lines[:kept]
+        console_lines.append(f"│ ... (省略{omitted}行，详见日志文件)")
 
-    for line in lines:
-        logger.info(line)
-
+    for h in list(getattr(logger, "handlers", [])):
+        if _is_file_handler(h):
+            for line in lines:
+                _emit_line(logger, h, line)
+        elif _is_console_handler(h):
+            for line in console_lines:
+                _emit_line(logger, h, line)
+        else:
+            for line in lines:
+                _emit_line(logger, h, line)
 
