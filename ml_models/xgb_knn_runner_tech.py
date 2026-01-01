@@ -3,6 +3,7 @@
 # 输出: 同 main.py（temp_scores parquet / 权重 csv / logs / 因子重要性等）
 # 依赖: /ml_models/main.py（run）
 from __future__ import annotations
+from pathlib import Path
 
 if __name__ == "__main__":
     from ml_models.main import run
@@ -11,13 +12,14 @@ if __name__ == "__main__":
     raise SystemExit(0)
 
 # ================= 配置区域 =================
-FACTOR_DATA_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_with_fundamentals.parquet"
-PRICE_DATA_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk.parquet"
-MERGED_DATA_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/pre_data/merged_20200101_20241231.csv"
-OUTPUT_DIR = "/Users/zhuzhuxia/Documents/SZU_w4/ml_results"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FACTOR_DATA_PATH = str(PROJECT_ROOT / "factors_data" / "all_factors_with_fundamentals.parquet")
+PRICE_DATA_PATH = str(PROJECT_ROOT / "pre_data" / "cleaned_stock_data_300_688_with_idxstk.parquet")
+MERGED_DATA_PATH = str(PROJECT_ROOT / "pre_data" / "merged_20200101_20241231.csv")
+OUTPUT_DIR = str(PROJECT_ROOT / "ml_results")
 SUB_DIR_NAME = "xgb_results_gem_star_momo"
 TEMP_DIR_NAME = "temp_scores_gem_star_momo"
-FACTORS_IMPORTANCE_DIR = "/Users/zhuzhuxia/Documents/SZU_w4/ml_results/factors_importance"
+FACTORS_IMPORTANCE_DIR = str(PROJECT_ROOT / "ml_results" / "factors_importance")
 STOCK_POOL_PREFIXES = ("300", "688")
 
 DEFAULT_DROP_FACTORS = [

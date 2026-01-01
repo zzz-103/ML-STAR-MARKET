@@ -1,5 +1,8 @@
 import pandas as pd
-FF_FACTORS_CSV_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/factors_data/ff_factors/ff_factors.csv"
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FF_FACTORS_CSV_PATH = str(PROJECT_ROOT / "factors_data" / "ff_factors" / "ff_factors.csv")
 FF_MARKETTYPE_ID = "P9714"
 
 
@@ -28,4 +31,3 @@ def run(df):
     aligned = df_ff.reindex(dates).fillna(0.0)
     aligned.index = df.index
     return aligned
-

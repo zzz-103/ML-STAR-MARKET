@@ -130,4 +130,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """解析命令行参数；argv=None 表示直接读取 sys.argv。"""
     parser = build_arg_parser()
-    return parser.parse_args(args=argv)
+    args = parser.parse_args(args=argv)
+    for k in ("factor_data_path", "price_data_path", "risk_data_path", "output_dir", "factors_importance_dir"):
+        if hasattr(args, k):
+            setattr(args, k, cfg.resolve_path(getattr(args, k)))
+    return args

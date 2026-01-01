@@ -4,14 +4,28 @@
 # 依赖: 无
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def resolve_path(path: str) -> str:
+    p = str(path)
+    if not p:
+        return p
+    if os.path.isabs(p):
+        return p
+    return str((PROJECT_ROOT / p).resolve(strict=False))
+
 DEFAULT_PATHS = {
-    "factor_data_path": "/Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_with_fundamentals.parquet",
-    "price_data_path": "/Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk.parquet",
-    "risk_data_path": "/Users/zhuzhuxia/Documents/SZU_w4/pre_data/merged_20200101_20241231.csv",
-    "output_dir": "/Users/zhuzhuxia/Documents/SZU_w4/ml_results",
+    "factor_data_path": "factors_data/all_factors_with_fundamentals.parquet",
+    "price_data_path": "pre_data/cleaned_stock_data_300_688_with_idxstk.parquet",
+    "risk_data_path": "pre_data/merged_20200101_20241231.csv",
+    "output_dir": "ml_results",
     "sub_dir_name": "xgb_results_gem_star_momo",
     "temp_dir_name": "temp_scores_gem_star_momo",
-    "factors_importance_dir": "/Users/zhuzhuxia/Documents/SZU_w4/ml_results/factors_importance",
+    "factors_importance_dir": "ml_results/factors_importance",
 }
 
 DEFAULT_UNIVERSE = {

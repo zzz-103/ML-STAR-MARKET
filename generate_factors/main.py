@@ -7,33 +7,35 @@ import pkgutil
 import argparse
 import sys
 import re
+from pathlib import Path
 from datetime import datetime
 
 # ================= 配置区域 =================
 # 1. 原始大文件路径 (你的原始合并 CSV)
-RAW_INPUT_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/pre_data/merged_20200101_20241231.csv"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RAW_INPUT_PATH = str(PROJECT_ROOT / "pre_data" / "merged_20200101_20241231.csv")
 
 # 2. 清洗后的缓存文件设置
-CLEANED_DATA_DIR = "/Users/zhuzhuxia/Documents/SZU_w4/pre_data"
+CLEANED_DATA_DIR = str(PROJECT_ROOT / "pre_data")
 CLEANED_FILE_NAME = "cleaned_stock_data.parquet"
 CLEANED_DATA_PATH = os.path.join(CLEANED_DATA_DIR, CLEANED_FILE_NAME)
 
 # 3. 因子输出根目录
-OUTPUT_ROOT = "/Users/zhuzhuxia/Documents/SZU_w4/factors_data"
+OUTPUT_ROOT = str(PROJECT_ROOT / "factors_data")
 
 # 4. 模型文件夹名称
 MODELS_PKG = "models"
 
-FUND_PRICE_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk.parquet"
-FUND_FACTOR_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_20200101_20241231.parquet"
-FUND_OUTPUT_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_with_fundamentals.parquet"
+FUND_PRICE_PATH = str(PROJECT_ROOT / "pre_data" / "cleaned_stock_data_300_688_with_idxstk.parquet")
+FUND_FACTOR_PATH = str(PROJECT_ROOT / "factors_data" / "all_factors_20200101_20241231.parquet")
+FUND_OUTPUT_PATH = str(PROJECT_ROOT / "factors_data" / "all_factors_with_fundamentals.parquet")
 # ===========================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-SUMMARY_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/generate_factors/factors_summary.txt"
+SUMMARY_PATH = str(Path(__file__).resolve().parent / "factors_summary.txt")
 QUALITY_START = "20230101"
 QUALITY_END = "20241231"
 MASKED_FACTORS = {"ff_mkt", "ff_hml", "ff_smb", "ff_smb_cov_60"}

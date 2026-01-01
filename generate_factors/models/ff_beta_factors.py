@@ -1,9 +1,11 @@
 import pandas as pd
 import os
 import numpy as np
+from pathlib import Path
 
 # === 配置 ===
-FF_FILE_PATH = "/Users/zhuzhuxia/Documents/SZU_w4/factors_data/ff_factors/ff_factors.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FF_FILE_PATH = str(PROJECT_ROOT / "factors_data" / "ff_factors" / "ff_factors.csv")
 FF_MARKETTYPE_ID = "P9714"
 ROLLING_WINDOW = 60
 
