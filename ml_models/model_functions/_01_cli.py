@@ -75,6 +75,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--industry-ma-window", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_ma_window", 20))
     parser.add_argument("--industry-ma-riskoff-buffer", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_ma_riskoff_buffer", 0.01))
     parser.add_argument("--industry-riskoff-policy", choices=["ban_new", "ban_all"], default=cfg.DEFAULT_PORTFOLIO.get("industry_riskoff_policy", "ban_new"))
+    parser.add_argument("--industry-max-weight", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_max_weight", 0.30))
+    parser.add_argument("--industry-riskoff-weight-scale", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_riskoff_weight_scale", 0.5))
 
     parser.add_argument("--timing-method", choices=["index_ma20", "index_ma_dual", "score", "none"], default=cfg.DEFAULT_TIMING["timing_method"])
     parser.add_argument("--timing-threshold", type=float, default=cfg.DEFAULT_TIMING["timing_threshold"])

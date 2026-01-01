@@ -114,6 +114,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
     history_scores: list[pd.Series] = []
     days_since_last_trade = int(getattr(args, "rebalance_period"))
     market_risk_on = True
+    industry_riskoff_state: dict[str, bool] = {}
     idx = pd.IndexSlice
 
     for file_path in tqdm(temp_files, desc="Generating Positions"):
@@ -273,6 +274,13 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 industry_risk_off_row = industry_risk_off_df.loc[target_date, :]
             except Exception:
                 industry_risk_off_row = None
+        if industry_enabled and industry_risk_off_row is not None:
+            try:
+                for ind, v in industry_risk_off_row.items():
+                    now_off = bool(float(v) >= 0.5) if v is not None else False
+                    industry_riskoff_state[str(ind)] = bool(now_off)
+            except Exception:
+                pass
 
         strong_pct = float(getattr(args, "industry_rank_strong_pct", 0.2))
         weak_pct = float(getattr(args, "industry_rank_weak_pct", 0.2))
@@ -494,6 +502,63 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 w_next = w_buy.copy() if len(w_next) == 0 else pd.concat([w_next, w_buy])
 
         w_next = w_next[w_next > 0].astype("float64")
+        if industry_enabled and len(w_next) > 0:
+            riskoff_scale = float(getattr(args, "industry_riskoff_weight_scale", 1.0))
+            riskoff_scale = 1.0 if not np.isfinite(riskoff_scale) else max(0.0, riskoff_scale)
+            if riskoff_scale < 1.0 and industry_risk_off_row is not None:
+                ind_by_code = pd.Series({_c: _industry_of(_c) for _c in w_next.index.astype(str)}, dtype="string")
+                riskoff_inds = sorted({str(i) for i in ind_by_code.to_list() if _is_risk_off(str(i))})
+                entering = [ind for ind in riskoff_inds if (not bool(industry_riskoff_state.get(str(ind), False)))]
+                if len(riskoff_inds) > 0:
+                    for ind in entering:
+                        m = ind_by_code == ind
+                        w_before = float(w_next.loc[m].sum())
+                        if w_before <= 0:
+                            continue
+                        w_next.loc[m] = (w_next.loc[m] * riskoff_scale).astype("float64")
+                        w_after = float(w_next.loc[m].sum())
+                        logger.info(
+                            "industry_riskoff_scale date=%s industry=%s scale=%.4f w=%.6f->%.6f",
+                            date_str,
+                            str(ind),
+                            float(riskoff_scale),
+                            float(w_before),
+                            float(w_after),
+                        )
+                    for ind in riskoff_inds:
+                        industry_riskoff_state[str(ind)] = True
+                for ind in ind_by_code.unique().tolist():
+                    if str(ind) not in riskoff_inds:
+                        industry_riskoff_state[str(ind)] = False
+
+            max_ind_w = float(getattr(args, "industry_max_weight", 1.0))
+            max_ind_w = 1.0 if not np.isfinite(max_ind_w) else max(0.0, max_ind_w)
+            if 0 < max_ind_w < 1:
+                ind_by_code = pd.Series({_c: _industry_of(_c) for _c in w_next.index.astype(str)}, dtype="string")
+                df_w = pd.DataFrame(
+                    {"w": w_next.to_numpy(dtype="float64"), "industry": ind_by_code.astype(str).to_numpy(dtype=object)},
+                    index=w_next.index,
+                )
+                sector_w = df_w.groupby("industry", sort=False)["w"].sum()
+                hit = sector_w[sector_w > float(max_ind_w) + 1e-12].sort_values(ascending=False)
+                for ind, w_before in hit.items():
+                    w_before = float(w_before)
+                    if w_before <= 0:
+                        continue
+                    scale = float(max_ind_w) / w_before
+                    m = df_w["industry"] == ind
+                    w_next.loc[m.to_numpy(dtype=bool)] = (w_next.loc[m.to_numpy(dtype=bool)] * scale).astype("float64")
+                    w_after = float(w_next.loc[m.to_numpy(dtype=bool)].sum())
+                    logger.info(
+                        "industry_weight_cap date=%s industry=%s cap=%.4f scale=%.6f w=%.6f->%.6f",
+                        date_str,
+                        str(ind),
+                        float(max_ind_w),
+                        float(scale),
+                        float(w_before),
+                        float(w_after),
+                    )
+
         w_next_sum = float(w_next.sum()) if len(w_next) > 0 else 0.0
         if np.isfinite(w_next_sum) and w_next_sum > 1 + 1e-10:
             w_next = (w_next / w_next_sum).astype("float64")

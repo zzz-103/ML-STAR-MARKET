@@ -91,6 +91,8 @@ DEFAULT_PORTFOLIO = {
     "industry_ma_window": 20,
     "industry_ma_riskoff_buffer": 0.01,
     "industry_riskoff_policy": "ban_new",
+    "industry_max_weight": 0.30,
+    "industry_riskoff_weight_scale": 0.5,
 }
 
 DEFAULT_TIMING = {
