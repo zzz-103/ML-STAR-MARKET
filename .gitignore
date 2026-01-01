@@ -1,0 +1,14 @@
+.trae/
+.venv/
+backtest_results/
+copy/
+/factors_data/
+frandy_code/
+pre_data/
+ml_results_compare/
+ml_results/
+_debug_drift.py
+StockData_Backup/
+*.pyc
+.DS_Store
+_pycache_/
