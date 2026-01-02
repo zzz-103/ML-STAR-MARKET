@@ -77,6 +77,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--industry-riskoff-policy", choices=["ban_new", "ban_all"], default=cfg.DEFAULT_PORTFOLIO.get("industry_riskoff_policy", "ban_new"))
     parser.add_argument("--industry-max-weight", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_max_weight", 0.30))
     parser.add_argument("--industry-riskoff-weight-scale", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_riskoff_weight_scale", 0.5))
+    parser.add_argument(
+        "--industry-fast-reversal-enable",
+        action=argparse.BooleanOptionalAction,
+        default=cfg.DEFAULT_PORTFOLIO.get("industry_fast_reversal_enable", False),
+    )
+    parser.add_argument(
+        "--industry-fast-reversal-ret-threshold",
+        type=float,
+        default=cfg.DEFAULT_PORTFOLIO.get("industry_fast_reversal_ret_threshold", 0.03),
+    )
+    parser.add_argument(
+        "--industry-fast-reversal-vol-window",
+        type=int,
+        default=cfg.DEFAULT_PORTFOLIO.get("industry_fast_reversal_vol_window", 20),
+    )
+    parser.add_argument(
+        "--industry-fast-reversal-vol-mult",
+        type=float,
+        default=cfg.DEFAULT_PORTFOLIO.get("industry_fast_reversal_vol_mult", 1.5),
+    )
+    parser.add_argument(
+        "--industry-fast-reversal-observe-scale",
+        type=float,
+        default=cfg.DEFAULT_PORTFOLIO.get("industry_fast_reversal_observe_scale", 0.5),
+    )
+    parser.add_argument("--industry-bull-enable", action=argparse.BooleanOptionalAction, default=cfg.DEFAULT_PORTFOLIO.get("industry_bull_enable", False))
+    parser.add_argument("--industry-bull-ma-window", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_bull_ma_window", 60))
+    parser.add_argument("--industry-bull-max-weight", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_bull_max_weight", 0.60))
 
     parser.add_argument("--timing-method", choices=["index_ma20", "index_ma_dual", "score", "none"], default=cfg.DEFAULT_TIMING["timing_method"])
     parser.add_argument("--timing-threshold", type=float, default=cfg.DEFAULT_TIMING["timing_threshold"])

@@ -52,9 +52,10 @@ def process_single_day_score(
         X_test = test_data[final_features]
         objective = str(getattr(args, "xgb_objective", "reg:squarederror"))
         if objective.startswith("rank:"):
+            train_dates_u = train_data.index.get_level_values("date").unique().sort_values()
             sample_weight = build_sample_weights(
                 mode=str(getattr(args, "sample_weight_mode", "none")),
-                train_dates=np.unique(train_data.index.get_level_values("date").to_numpy()),
+                train_dates=train_dates_u,
                 ref_date=train_end_date,
                 anchor_days=int(getattr(args, "decay_anchor_days", 0)),
                 half_life_days=int(getattr(args, "decay_half_life_days", 1)),

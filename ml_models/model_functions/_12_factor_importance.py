@@ -56,8 +56,7 @@ def compute_factor_importance(
 
     objective = str(getattr(args, "xgb_objective", "reg:squarederror"))
     if objective.startswith("rank:"):
-        train_dates = train_data.index.get_level_values("date").to_numpy()
-        _, group_sizes = np.unique(train_dates, return_counts=True)
+        group_sizes = train_data.groupby(level="date", sort=True).size().to_numpy(dtype=np.uint32)
         model: xgb.XGBModel = xgb.XGBRanker(
             n_estimators=int(getattr(args, "n_estimators")),
             learning_rate=float(getattr(args, "learning_rate")),
@@ -68,7 +67,7 @@ def compute_factor_importance(
             reg_lambda=float(getattr(args, "reg_lambda", 1.0)),
             n_jobs=1,
             objective=objective,
-            eval_metric="ndcg",
+            eval_metric="ndcg@20",
             random_state=42,
             tree_method="hist",
             monotone_constraints=monotone_constraints,

@@ -79,10 +79,21 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 logger.info("risk_data_missing timing_fallback=none method=index_ma_dual")
                 timing_method = "none"
 
+    bull_df = None
+    if bool(getattr(args, "industry_bull_enable", False)):
+        bull_df = load_index_ma_risk_signal(
+            str(getattr(args, "risk_data_path")),
+            str(getattr(args, "risk_index_code")),
+            int(getattr(args, "industry_bull_ma_window", 60)),
+            start_s,
+            end_s,
+        )
+
     industry_enabled = bool(getattr(args, "industry_enable", False))
     code_to_industry: dict[str, str] = {}
     industry_rank_pct_df: pd.DataFrame | None = None
     industry_risk_off_df: pd.DataFrame | None = None
+    industry_fast_reversal_df: pd.DataFrame | None = None
     if industry_enabled:
         industry_map_path = str(getattr(args, "industry_map_path", "")).strip()
         code_to_industry = load_stock_industry_map(industry_map_path)
@@ -104,6 +115,35 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 ma = sector_idx.rolling(window=ma_window, min_periods=ma_window).mean()
                 risk_off = (sector_idx < (ma * (1.0 - riskoff_buf))).astype("float64")
                 industry_risk_off_df = risk_off.shift(1).fillna(0.0).astype("float64")
+                if bool(getattr(args, "industry_fast_reversal_enable", False)):
+                    turnover_col = None
+                    for c in ("turnover_prev", "turnover", "amount", "volume", "vol"):
+                        if c in df_price.columns:
+                            turnover_col = c
+                            break
+                    if turnover_col is not None:
+                        ret_thr = float(getattr(args, "industry_fast_reversal_ret_threshold", 0.03))
+                        vol_window = int(getattr(args, "industry_fast_reversal_vol_window", 20))
+                        vol_mult = float(getattr(args, "industry_fast_reversal_vol_mult", 1.5))
+                        vol_window = 0 if vol_window is None else int(vol_window)
+                        if vol_window > 1 and np.isfinite(ret_thr) and np.isfinite(vol_mult) and vol_mult > 0:
+                            s_tv = pd.to_datetime(need_start_dt, format="%Y%m%d", errors="coerce")
+                            e_tv = pd.to_datetime(end_s, format="%Y%m%d", errors="coerce")
+                            df_tv = df_price
+                            if (not pd.isna(s_tv)) and (not pd.isna(e_tv)):
+                                dates = df_tv.index.get_level_values("date")
+                                m = (dates >= s_tv) & (dates <= e_tv)
+                                df_tv = df_tv.loc[m.to_numpy(dtype=bool), :]
+                            tv = pd.to_numeric(df_tv[turnover_col], errors="coerce")
+                            ind = df_tv["industry"].astype("string")
+                            d = df_tv.index.get_level_values("date")
+                            tmp = pd.DataFrame({"date": d, "industry": ind, "tv": tv}).dropna(subset=["tv", "industry"])
+                            sector_tv = tmp.groupby(["date", "industry"], sort=True)["tv"].mean().unstack("industry").sort_index()
+                            tv_ma = sector_tv.rolling(window=vol_window, min_periods=vol_window).mean()
+                            vol_ratio = sector_tv / tv_ma
+                            under_ma = sector_idx < ma
+                            fast = (under_ma & (sector_ret > ret_thr) & (vol_ratio > vol_mult)).astype("float64")
+                            industry_fast_reversal_df = fast.shift(1).fillna(0.0).astype("float64")
             else:
                 industry_enabled = False
         except Exception:
@@ -264,6 +304,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         prev_syms = set(prev_w.index.astype(str).tolist())
         industry_rank_row = None
         industry_risk_off_row = None
+        industry_fast_reversal_row = None
         if industry_enabled and industry_rank_pct_df is not None and target_date in industry_rank_pct_df.index:
             try:
                 industry_rank_row = industry_rank_pct_df.loc[target_date, :]
@@ -274,6 +315,11 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 industry_risk_off_row = industry_risk_off_df.loc[target_date, :]
             except Exception:
                 industry_risk_off_row = None
+        if industry_enabled and industry_fast_reversal_df is not None and target_date in industry_fast_reversal_df.index:
+            try:
+                industry_fast_reversal_row = industry_fast_reversal_df.loc[target_date, :]
+            except Exception:
+                industry_fast_reversal_row = None
         if industry_enabled and industry_risk_off_row is not None:
             try:
                 for ind, v in industry_risk_off_row.items():
@@ -292,6 +338,12 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         unknown_max = int(getattr(args, "industry_unknown_max_count", 2))
         min_industries = int(getattr(args, "industry_min_industries", 4))
         riskoff_policy = str(getattr(args, "industry_riskoff_policy", "ban_new")).lower()
+        bull_market = False
+        if bull_df is not None and target_date in bull_df.index:
+            try:
+                bull_market = bool(float(bull_df.loc[target_date, "risk_on"]) >= 0.5)
+            except Exception:
+                bull_market = False
 
         def _industry_of(code: str) -> str:
             if not industry_enabled:
@@ -306,6 +358,15 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 return False
             try:
                 v = industry_risk_off_row.get(industry, 0.0)
+                return bool(float(v) >= 0.5)
+            except Exception:
+                return False
+
+        def _has_fast_reversal(industry: str) -> bool:
+            if industry_fast_reversal_row is None:
+                return False
+            try:
+                v = industry_fast_reversal_row.get(industry, 0.0)
                 return bool(float(v) >= 0.5)
             except Exception:
                 return False
@@ -331,6 +392,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         target_selected: list[str] = []
         target_set: set[str] = set()
         industry_count: dict[str, int] = {}
+        fast_reversal_new_candidates: set[str] = set()
         if len(prev_w) > 0:
             top_buffer = set(ranked_adj_codes[: int(getattr(args, "buffer_k"))])
             for code in yesterday_holding_list:
@@ -353,7 +415,9 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                     if riskoff_policy == "ban_all":
                         continue
                     if riskoff_policy == "ban_new" and is_new:
-                        continue
+                        if not _has_fast_reversal(ind):
+                            continue
+                        fast_reversal_new_candidates.add(str(code))
                 q = _quota(ind)
                 if industry_enabled and int(industry_count.get(ind, 0)) >= int(q):
                     continue
@@ -382,7 +446,9 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                         if riskoff_policy == "ban_all":
                             continue
                         if riskoff_policy == "ban_new" and is_new:
-                            continue
+                            if not _has_fast_reversal(ind):
+                                continue
+                            fast_reversal_new_candidates.add(str(c))
                     if int(industry_count.get(ind, 0)) >= int(_quota(ind)):
                         continue
                     best_code_for_ind[ind] = c
@@ -486,6 +552,12 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 index=pd.Index(buy_keep, dtype="string"),
                 dtype="float64",
             )
+            observe_scale = float(getattr(args, "industry_fast_reversal_observe_scale", 1.0))
+            observe_scale = 1.0 if not np.isfinite(observe_scale) else max(0.0, observe_scale)
+            if observe_scale < 1.0 and len(fast_reversal_new_candidates) > 0 and len(w_buy) > 0:
+                m = w_buy.index.isin(list(fast_reversal_new_candidates))
+                if bool(m.any()):
+                    w_buy.loc[m] = (w_buy.loc[m] * observe_scale).astype("float64")
             max_w = float(getattr(args, "max_w", 1.0))
             if np.isfinite(max_w) and 0 < max_w < 1:
                 w_rel = apply_max_weight_cap(w_buy, max_w / float(buy_budget))
@@ -533,19 +605,25 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
 
             max_ind_w = float(getattr(args, "industry_max_weight", 1.0))
             max_ind_w = 1.0 if not np.isfinite(max_ind_w) else max(0.0, max_ind_w)
-            if 0 < max_ind_w < 1:
+            cap_today = float(max_ind_w)
+            if bull_market:
+                bull_cap = float(getattr(args, "industry_bull_max_weight", cap_today))
+                bull_cap = cap_today if (not np.isfinite(bull_cap)) else max(0.0, bull_cap)
+                if bull_cap > cap_today:
+                    cap_today = float(bull_cap)
+            if 0 < cap_today < 1:
                 ind_by_code = pd.Series({_c: _industry_of(_c) for _c in w_next.index.astype(str)}, dtype="string")
                 df_w = pd.DataFrame(
                     {"w": w_next.to_numpy(dtype="float64"), "industry": ind_by_code.astype(str).to_numpy(dtype=object)},
                     index=w_next.index,
                 )
                 sector_w = df_w.groupby("industry", sort=False)["w"].sum()
-                hit = sector_w[sector_w > float(max_ind_w) + 1e-12].sort_values(ascending=False)
+                hit = sector_w[sector_w > float(cap_today) + 1e-12].sort_values(ascending=False)
                 for ind, w_before in hit.items():
                     w_before = float(w_before)
                     if w_before <= 0:
                         continue
-                    scale = float(max_ind_w) / w_before
+                    scale = float(cap_today) / w_before
                     m = df_w["industry"] == ind
                     w_next.loc[m.to_numpy(dtype=bool)] = (w_next.loc[m.to_numpy(dtype=bool)] * scale).astype("float64")
                     w_after = float(w_next.loc[m.to_numpy(dtype=bool)].sum())
@@ -553,7 +631,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                         "industry_weight_cap date=%s industry=%s cap=%.4f scale=%.6f w=%.6f->%.6f",
                         date_str,
                         str(ind),
-                        float(max_ind_w),
+                        float(cap_today),
                         float(scale),
                         float(w_before),
                         float(w_after),

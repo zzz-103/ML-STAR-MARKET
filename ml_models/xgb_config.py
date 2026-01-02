@@ -52,7 +52,7 @@ DEFAULT_TRAINING = {
 }
 
 DEFAULT_MODEL = {
-    "xgb_objective": "reg:squarederror",
+    "xgb_objective": "rank:pairwise",
     "n_estimators": 200,
     "learning_rate": 0.01,
     "max_depth": 4,
@@ -93,6 +93,14 @@ DEFAULT_PORTFOLIO = {
     "industry_riskoff_policy": "ban_new",
     "industry_max_weight": 0.30,
     "industry_riskoff_weight_scale": 0.5,
+    "industry_fast_reversal_enable": True,
+    "industry_fast_reversal_ret_threshold": 0.03,
+    "industry_fast_reversal_vol_window": 20,
+    "industry_fast_reversal_vol_mult": 1.5,
+    "industry_fast_reversal_observe_scale": 0.5,
+    "industry_bull_enable": True,
+    "industry_bull_ma_window": 60,
+    "industry_bull_max_weight": 0.60,
 }
 
 DEFAULT_TIMING = {

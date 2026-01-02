@@ -90,6 +90,7 @@ def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.Data
 
     logger.info("步骤: 加载价格数据 path=%s", price_path)
     df_price = pd.read_parquet(price_path).sort_index()
+    logger.info("价格数据加载完毕 shape=%s industry列=%s", df_price.shape, "industry" in df_price.columns)
     pool_mask_p = df_price.index.get_level_values("code").astype(str).str.startswith(prefixes)
     df_price = df_price.loc[pool_mask_p, :]
     if end_dt is not None:

@@ -123,9 +123,10 @@ def run_overfit_check_on_panel(args, df_ml: pd.DataFrame, logger: logging.Logger
 
         objective = str(getattr(args, "xgb_objective", "reg:squarederror"))
         if objective.startswith("rank:"):
+            tr_dates_u = tr.index.get_level_values("date").unique().sort_values()
             sw = build_sample_weights(
                 mode=str(getattr(args, "sample_weight_mode", "none")),
-                train_dates=np.unique(tr.index.get_level_values("date").to_numpy()),
+                train_dates=tr_dates_u,
                 ref_date=sub_train_dates.max(),
                 anchor_days=int(getattr(args, "decay_anchor_days", 0)),
                 half_life_days=int(getattr(args, "decay_half_life_days", 1)),

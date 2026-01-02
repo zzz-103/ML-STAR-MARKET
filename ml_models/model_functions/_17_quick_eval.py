@@ -26,6 +26,7 @@ class QuickEvalPaths:
     fig_equity_png: Path
     fig_excess_hist_png: Path
     fig_heatmap_png: Path
+    fig_relative_equity_png: Path
 
 
 def _ensure_dir(p: Path) -> None:
@@ -345,6 +346,46 @@ def _plot_monthly_heatmap(monthly_return: pd.DataFrame, out_path: Path) -> None:
     plt.close()
 
 
+def _plot_relative_equity(dates: pd.DatetimeIndex, equity: pd.Series, bench_equity: pd.Series | None, out_path: Path) -> None:
+    plt.figure(figsize=(14, 6), dpi=120)
+    
+    if bench_equity is None or len(bench_equity) != len(equity):
+        plt.text(0.5, 0.5, "Benchmark Equity Data Missing or Length Mismatch", ha="center", va="center")
+        plt.title("Relative Equity Curve (Strategy / Benchmark)")
+        plt.tight_layout()
+        plt.savefig(out_path)
+        plt.close()
+        return
+
+    eq = pd.to_numeric(equity, errors="coerce").astype("float64")
+    beq = pd.to_numeric(bench_equity, errors="coerce").astype("float64")
+    beq = beq.replace(0.0, np.nan)
+    rel_s = (eq / beq).replace([np.inf, -np.inf], np.nan)
+    if len(rel_s) > 0 and (not np.isfinite(float(rel_s.iloc[0]))):
+        rel_s.iloc[0] = 1.0
+    rel_s = rel_s.ffill()
+    
+    x = dates
+    y = rel_s.to_numpy(dtype="float64")
+    
+    # Plot Relative Line
+    plt.plot(x, y, label="Relative Strength (Strategy/Benchmark)", linewidth=1.5, color="#d62728", zorder=5)
+    
+    # Baseline at 1.0
+    plt.axhline(1.0, color="gray", linestyle="--", linewidth=1, alpha=0.6, label="Baseline (1.0)")
+    
+    # Fill areas: Green for Outperform (> 1.0), Red for Underperform (< 1.0)
+    plt.fill_between(x, y, 1.0, where=(y >= 1.0), interpolate=True, color="green", alpha=0.15, label="Outperform Area")
+    plt.fill_between(x, y, 1.0, where=(y < 1.0), interpolate=True, color="red", alpha=0.15, label="Underperform Area")
+    
+    plt.title("Relative Equity Curve (Strategy vs Benchmark)")
+    plt.grid(True, linestyle="--", alpha=0.35)
+    plt.legend(loc="upper left")
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+
 def _encode_img_base64(path: Path) -> str:
     b = path.read_bytes()
     ext = path.suffix.lower().lstrip(".")
@@ -363,6 +404,7 @@ def _build_paths(save_dir: str, dir_name: str) -> QuickEvalPaths:
         fig_equity_png=base / "equity.png",
         fig_excess_hist_png=base / "excess_hist.png",
         fig_heatmap_png=base / "monthly_heatmap.png",
+        fig_relative_equity_png=base / "relative_equity.png",
     )
 
 
@@ -755,6 +797,7 @@ def _render_html_report(
     fig_equity = _encode_img_base64(paths.fig_equity_png) if paths.fig_equity_png.exists() else ""
     fig_hist = _encode_img_base64(paths.fig_excess_hist_png) if paths.fig_excess_hist_png.exists() else ""
     fig_heat = _encode_img_base64(paths.fig_heatmap_png) if paths.fig_heatmap_png.exists() else ""
+    fig_rel = _encode_img_base64(paths.fig_relative_equity_png) if paths.fig_relative_equity_png.exists() else ""
 
     # Metrics Table
     mt = []
@@ -1117,6 +1160,10 @@ def _render_html_report(
         <img src="{fig_equity}"/>
     </div>
     <div class="chart-card">
+        <h3>相对净值曲线 (Relative Equity vs Benchmark)</h3>
+        <img src="{fig_rel}"/>
+    </div>
+    <div class="chart-card">
         <h3>胜率分布 (Win Rate)</h3>
         <img src="{fig_winrate}"/>
     </div>
@@ -1200,6 +1247,7 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
 
     _plot_winrate_tables(win_tables, paths.fig_winrate_png)
     _plot_equity_curve(daily.index, equity, bench_eq.reindex(equity.index).ffill(), paths.fig_equity_png)
+    _plot_relative_equity(daily.index, equity, bench_eq.reindex(equity.index).ffill(), paths.fig_relative_equity_png)
     _plot_excess_hist(ex, paths.fig_excess_hist_png)
     _plot_monthly_heatmap(monthly_ret, paths.fig_heatmap_png)
 

@@ -11,6 +11,9 @@
 
 ---
 
+## 激活环境
+
+source /Users/zhuzhuxia/Documents/SZU_w4/.venv/bin/activate
 
 ## 程序结构与运行方式
 
@@ -160,6 +163,14 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
 - **行业配额/分散度**：按行业强弱分组分配名额，并尽量保证至少覆盖 `industry_min_industries` 个行业（默认 4）。
 - **单行业权重硬顶**：若某行业总权重超过 `industry_max_weight`（默认 0.30），该行业内权重按比例缩放，削减部分直接转为现金（降低总仓位）。
 - **Risk-Off 持仓降权**：对 Risk-Off 行业的“老持仓”按 `industry_riskoff_weight_scale`（默认 0.5）缩放，降低风险暴露但不强制清仓。
+- **极速反转信号（A）**：当 `industry_riskoff_policy=ban_new` 时，若某行业仍处于 Risk-Off，但前一日出现“极速反转”信号，则允许该行业在当日开少量新仓；这些“极速反转新仓”的买入权重会乘 `industry_fast_reversal_observe_scale`（默认 0.5），未分配资金转为现金。信号构造使用前一日数据（shift(1)），避免同日未来信息：行业指数仍在 MA(`industry_ma_window`) 下方 & 行业当日涨幅 > `industry_fast_reversal_ret_threshold`（默认 3%）& 行业成交量/换手放大（`industry_fast_reversal_vol_window` 日均值的 `industry_fast_reversal_vol_mult` 倍，默认 20 日、1.5 倍）。
+- **牛市动态行业硬顶（B）**：当指数（`risk_index_code`）前一日收盘 > MA(`industry_bull_ma_window`，默认 60) 时视为“牛市”，单行业上限从 `industry_max_weight`（默认 0.30）临时提升到 `industry_bull_max_weight`（默认 0.60）；超出部分仍按比例缩放、资金变现金。
+
+默认开关（见 [xgb_config.py](file:///Users/zhuzhuxia/Documents/SZU_w4/ml_models/xgb_config.py)）：
+
+- `industry_enable=True`
+- `industry_fast_reversal_enable=True`
+- `industry_bull_enable=True`
 
 常用参数（均可 `--help` 查看；默认值在 [xgb_config.py](file:///Users/zhuzhuxia/Documents/SZU_w4/ml_models/xgb_config.py)）：
 
@@ -167,6 +178,8 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
 - 行业映射：`--industry-map-path`
 - 信号窗口：`--industry-mom-window`、`--industry-ma-window`、`--industry-ma-riskoff-buffer`
 - 风控参数：`--industry-max-weight`、`--industry-riskoff-weight-scale`、`--industry-riskoff-policy`
+- 极速反转（A）：`--industry-fast-reversal-enable / --no-industry-fast-reversal-enable`、`--industry-fast-reversal-ret-threshold`、`--industry-fast-reversal-vol-window`、`--industry-fast-reversal-vol-mult`、`--industry-fast-reversal-observe-scale`
+- 牛市硬顶（B）：`--industry-bull-enable / --no-industry-bull-enable`、`--industry-bull-ma-window`、`--industry-bull-max-weight`
 - 分组配额：`--industry-strong-max-count`、`--industry-neutral-max-count`、`--industry-weak-max-count`、`--industry-unknown-max-count`
 
 运行输出示例（部分）：
