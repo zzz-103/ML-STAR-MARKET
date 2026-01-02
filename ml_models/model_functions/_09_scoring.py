@@ -12,38 +12,63 @@ import pandas as pd
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.preprocessing import StandardScaler
 
-from ml_models.model_functions._04_feature_engineering import (
-    apply_feature_filters,
-    build_constraints_dict,
-    build_drop_factors,
-    build_monotone_constraints,
-)
 from ml_models.model_functions._05_weights import build_sample_weights
 from ml_models.model_functions._08_xgb_training import fit_xgb_model
+
+
+_WORKER_DF_ML: pd.DataFrame | None = None
+_WORKER_DF_PRICE: pd.DataFrame | None = None
+_WORKER_ARGS = None
+_WORKER_FEATURES: list[str] | None = None
+_WORKER_MONOTONE_CONSTRAINTS: str | None = None
+_WORKER_TEMP_DIR: str | None = None
+
+
+def init_scoring_worker(
+    df_ml: pd.DataFrame,
+    df_price: pd.DataFrame,
+    args,
+    features: list[str],
+    monotone_constraints: str | None,
+    temp_dir: str,
+) -> None:
+    global _WORKER_ARGS, _WORKER_DF_ML, _WORKER_DF_PRICE, _WORKER_FEATURES, _WORKER_MONOTONE_CONSTRAINTS, _WORKER_TEMP_DIR
+    _WORKER_DF_ML = df_ml
+    _WORKER_DF_PRICE = df_price
+    _WORKER_ARGS = args
+    _WORKER_FEATURES = features
+    _WORKER_MONOTONE_CONSTRAINTS = monotone_constraints
+    _WORKER_TEMP_DIR = temp_dir
 
 
 def process_single_day_score(
     target_date: pd.Timestamp,
     train_start_date: pd.Timestamp,
     train_end_date: pd.Timestamp,
-    df_ml: pd.DataFrame,
-    df_price: pd.DataFrame,
-    args,
-    features: list[str],
-    temp_dir: str,
+    df_ml: pd.DataFrame | None = None,
+    df_price: pd.DataFrame | None = None,
+    args=None,
+    features: list[str] | None = None,
+    temp_dir: str | None = None,
+    monotone_constraints: str | None = None,
 ) -> Optional[str]:
     try:
+        df_ml = _WORKER_DF_ML if df_ml is None else df_ml
+        df_price = _WORKER_DF_PRICE if df_price is None else df_price
+        args = _WORKER_ARGS if args is None else args
+        features = _WORKER_FEATURES if features is None else features
+        monotone_constraints = _WORKER_MONOTONE_CONSTRAINTS if monotone_constraints is None else monotone_constraints
+        temp_dir = _WORKER_TEMP_DIR if temp_dir is None else temp_dir
+        if df_ml is None or df_price is None or args is None or features is None or temp_dir is None:
+            return "Error: worker 未初始化或缺少必要参数"
+
         idx = pd.IndexSlice
         train_data = df_ml.loc[idx[train_start_date:train_end_date, :], :].sort_index()
         test_data = df_ml.loc[idx[target_date, :], :]
         if len(train_data) < 100 or len(test_data) == 0:
             return None
 
-        drop_factors = build_drop_factors(
-            use_default_drop_factors=bool(getattr(args, "use_default_drop_factors", True)),
-            drop_factors_csv=getattr(args, "drop_factors", None),
-        )
-        final_features = apply_feature_filters(features, drop_factors)
+        final_features = list(features)
         if len(final_features) == 0:
             return None
 
@@ -70,12 +95,6 @@ def process_single_day_score(
                 half_life_days=int(getattr(args, "decay_half_life_days", 1)),
                 min_weight=float(getattr(args, "decay_min_weight", 0.1)),
             )
-
-        constraints_dict = build_constraints_dict(
-            use_constraints=bool(getattr(args, "use_constraints", True)),
-            constraints_csv=getattr(args, "constraints", None),
-        )
-        monotone_constraints = build_monotone_constraints(final_features, constraints_dict)
 
         model_xgb = fit_xgb_model(
             X_train=X_train,

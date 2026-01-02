@@ -4,6 +4,8 @@
 # 依赖: /ml_models/xgb_config.py、numpy/pandas
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 
@@ -11,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from ml_models import xgb_config as cfg
+from ml_models.model_functions._04_feature_engineering import apply_feature_filters, build_drop_factors
 
 
 def _parse_yyyymmdd(value: str | None) -> pd.Timestamp | None:
@@ -27,8 +30,14 @@ def _parse_yyyymmdd(value: str | None) -> pd.Timestamp | None:
 
 def ensure_factors_index(df_factors: pd.DataFrame) -> pd.DataFrame:
     """确保因子数据为 MultiIndex(date, code)，并按索引排序。"""
-    if isinstance(df_factors.index, pd.MultiIndex) and list(df_factors.index.names)[:2] == ["date", "code"]:
-        return df_factors.sort_index()
+    if isinstance(df_factors.index, pd.MultiIndex) and df_factors.index.nlevels >= 2:
+        names = list(df_factors.index.names)[:2]
+        if names == ["date", "code"]:
+            return df_factors.sort_index()
+        if ("date" not in df_factors.columns) and ("code" not in df_factors.columns):
+            df = df_factors.copy()
+            df.index = df.index.set_names(["date", "code"] + list(df.index.names)[2:])
+            return df.sort_index()
     if "date" not in df_factors.columns or "code" not in df_factors.columns:
         raise ValueError("因子数据缺少 date/code 列，无法构建 MultiIndex")
     df = df_factors.copy()
@@ -52,6 +61,52 @@ def build_tradable_mask(df_price: pd.DataFrame, min_turnover: float) -> pd.Serie
     return (cond_active & cond_no_limit_up & cond_liquid).rename("tradable_t")
 
 
+def _infer_factor_columns_to_read(factor_path: str, drop_factors: set[str]) -> list[str] | None:
+    try:
+        import pyarrow.parquet as pq
+
+        schema_cols = list(pq.ParquetFile(factor_path).schema.names)
+    except Exception:
+        return None
+    candidate = [c for c in schema_cols if str(c) not in ("date", "code")]
+    selected = apply_feature_filters([str(c) for c in candidate], drop_factors)
+    out = [c for c in selected if c in schema_cols]
+    if "date" in schema_cols:
+        out.append("date")
+    if "code" in schema_cols:
+        out.append("code")
+    return out
+
+
+def _build_dataset_cache_key(args, *, factor_path: str, price_path: str, factor_cols: list[str] | None) -> str:
+    fp_stat = os.stat(factor_path)
+    pp_stat = os.stat(price_path)
+    prefixes = tuple(getattr(args, "stock_pool_prefixes", cfg.DEFAULT_UNIVERSE["stock_pool_prefixes"]))
+    drop_factors = build_drop_factors(
+        use_default_drop_factors=bool(getattr(args, "use_default_drop_factors", True)),
+        drop_factors_csv=getattr(args, "drop_factors", None),
+    )
+    payload = {
+        "factor_path": os.path.abspath(factor_path),
+        "factor_mtime_ns": int(getattr(fp_stat, "st_mtime_ns", int(fp_stat.st_mtime * 1e9))),
+        "factor_size": int(fp_stat.st_size),
+        "price_path": os.path.abspath(price_path),
+        "price_mtime_ns": int(getattr(pp_stat, "st_mtime_ns", int(pp_stat.st_mtime * 1e9))),
+        "price_size": int(pp_stat.st_size),
+        "end_date": getattr(args, "end_date", None),
+        "train_gap": int(getattr(args, "train_gap", cfg.DEFAULT_TRAINING.get("train_gap", 6))),
+        "stock_pool_prefixes": [str(x) for x in prefixes],
+        "min_turnover": float(getattr(args, "min_turnover", cfg.DEFAULT_UNIVERSE["min_turnover"])),
+        "label_benchmark_universe": str(getattr(args, "label_benchmark_universe", cfg.DEFAULT_LABEL["label_benchmark_universe"])),
+        "label_benchmark_method": str(getattr(args, "label_benchmark_method", cfg.DEFAULT_LABEL["label_benchmark_method"])),
+        "dropna_features": bool(getattr(args, "dropna_features", False)),
+        "drop_factors": sorted(list(drop_factors)),
+        "factor_cols": list(factor_cols) if factor_cols is not None else None,
+    }
+    s = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    return hashlib.sha1(s).hexdigest()
+
+
 def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.DataFrame]:
     """加载因子与价格数据，构建滞后特征，并生成超额收益标签 ret_next。"""
     factor_path = str(getattr(args, "factor_data_path"))
@@ -61,8 +116,28 @@ def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.Data
     if not os.path.exists(price_path):
         raise FileNotFoundError(f"找不到价格文件: {price_path}")
 
+    drop_factors = build_drop_factors(
+        use_default_drop_factors=bool(getattr(args, "use_default_drop_factors", True)),
+        drop_factors_csv=getattr(args, "drop_factors", None),
+    )
+    factor_cols = _infer_factor_columns_to_read(factor_path, drop_factors=drop_factors)
+    cache_key = _build_dataset_cache_key(args, factor_path=factor_path, price_path=price_path, factor_cols=factor_cols)
+    output_dir = str(getattr(args, "output_dir", os.path.dirname(os.path.abspath(factor_path))))
+    cache_dir = os.path.join(output_dir, "_dataset_cache")
+    cache_path = os.path.join(cache_dir, f"dataset_{cache_key}.pkl")
+    if bool(getattr(args, "use_dataset_cache", True)) and os.path.exists(cache_path):
+        try:
+            cached = pd.read_pickle(cache_path)
+            if isinstance(cached, dict) and "df_ml" in cached and "df_price" in cached:
+                return cached["df_ml"], cached["df_price"]
+        except Exception:
+            pass
+
     logger.info("step=load_factors path=%s", factor_path)
-    df_factors = ensure_factors_index(pd.read_parquet(factor_path))
+    if factor_cols is not None and len(factor_cols) > 0:
+        df_factors = ensure_factors_index(pd.read_parquet(factor_path, columns=factor_cols))
+    else:
+        df_factors = ensure_factors_index(pd.read_parquet(factor_path))
     prefixes = tuple(getattr(args, "stock_pool_prefixes", cfg.DEFAULT_UNIVERSE["stock_pool_prefixes"]))
     pool_mask_f = df_factors.index.get_level_values("code").astype(str).str.startswith(prefixes)
     df_factors = df_factors.loc[pool_mask_f, :]
@@ -132,4 +207,10 @@ def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.Data
     if end_dt is not None and len(df_ml) > 0:
         max_date = pd.to_datetime(df_ml.index.get_level_values("date").max())
         logger.info("数据集日期范围=%s~%s (end_date=%s)", df_ml.index.get_level_values("date").min().strftime("%Y%m%d"), max_date.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d"))
+    if bool(getattr(args, "use_dataset_cache", True)):
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            pd.to_pickle({"df_ml": df_ml, "df_price": df_price}, cache_path)
+        except Exception:
+            pass
     return df_ml, df_price

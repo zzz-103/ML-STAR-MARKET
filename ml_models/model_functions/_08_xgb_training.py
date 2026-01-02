@@ -45,7 +45,11 @@ def fit_xgb_model(
                 if isinstance(sample_weight, pd.Series):
                     sample_weight = sample_weight.reindex(X_train.index).to_numpy(dtype=np.float64)
                 else:
-                    sample_weight = np.asarray(sample_weight, dtype=np.float64)[idxer]
+                    w = np.asarray(sample_weight, dtype=np.float64).reshape(-1)
+                    if len(w) == len(y_train):
+                        sample_weight = w[idxer]
+                    else:
+                        sample_weight = w
         train_dates = X_train.index.get_level_values("date").to_numpy()
         group_sizes = _build_group_sizes_from_sorted_dates(train_dates)
         if sample_weight is not None:

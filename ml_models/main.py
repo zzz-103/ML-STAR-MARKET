@@ -22,9 +22,14 @@ from tqdm import tqdm
 from ml_models import xgb_config as cfg
 from ml_models.model_functions._01_cli import parse_args
 from ml_models.model_functions._03_logging_utils import build_logger, log_section, log_data_grid
-from ml_models.model_functions._04_feature_engineering import apply_feature_filters, build_drop_factors
+from ml_models.model_functions._04_feature_engineering import (
+    apply_feature_filters,
+    build_constraints_dict,
+    build_drop_factors,
+    build_monotone_constraints,
+)
 from ml_models.model_functions._06_data_preprocessing import prepare_dataset
-from ml_models.model_functions._09_scoring import process_single_day_score
+from ml_models.model_functions._09_scoring import init_scoring_worker, process_single_day_score
 from ml_models.model_functions._11_portfolio import generate_positions_with_buffer
 from ml_models.model_functions._12_factor_importance import compute_factor_importance, save_factor_importance
 from ml_models.model_functions._13_diagnosis import diagnose_factors
@@ -316,6 +321,11 @@ def run(argv: list[str] | None = None) -> None:
     final_features = apply_feature_filters(raw_features, drop_factors)
     log_section(logger, "特征工程 (Features)")
     logger.info("最终特征数=%d 示例=%s", int(len(final_features)), final_features[:8])
+    constraints_dict = build_constraints_dict(
+        use_constraints=bool(getattr(args, "use_constraints", True)),
+        constraints_csv=getattr(args, "constraints", None),
+    )
+    monotone_constraints = build_monotone_constraints(final_features, constraints_dict)
 
     train_window = int(getattr(args, "train_window"))
     train_gap = int(getattr(args, "train_gap", cfg.DEFAULT_TRAINING["train_gap"]))
@@ -362,18 +372,17 @@ def run(argv: list[str] | None = None) -> None:
     n_none = 0
     n_err = 0
     err_samples: list[str] = []
-    with ProcessPoolExecutor(max_workers=int(getattr(args, "n_workers"))) as executor:
+    with ProcessPoolExecutor(
+        max_workers=int(getattr(args, "n_workers")),
+        initializer=init_scoring_worker,
+        initargs=(df_ml, df_price, args, final_features, monotone_constraints, temp_dir),
+    ) as executor:
         futures = [
             executor.submit(
                 process_single_day_score,
                 t[0],
                 t[1],
                 t[2],
-                df_ml,
-                df_price,
-                args,
-                final_features,
-                temp_dir,
             )
             for t in tasks
         ]
