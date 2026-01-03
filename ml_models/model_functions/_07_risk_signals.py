@@ -82,7 +82,7 @@ def compute_sector_daily_returns(
         df = df.loc[m.to_numpy(dtype=bool), :]
 
     close = pd.to_numeric(df[close_col], errors="coerce")
-    ret = close.groupby(level="code").pct_change()
+    ret = close.groupby(level="code").pct_change(fill_method=None)
     ind = df[industry_col].astype("string")
     d = df.index.get_level_values("date")
     tmp = pd.DataFrame({"date": d, "industry": ind, "ret": ret})
@@ -90,6 +90,80 @@ def compute_sector_daily_returns(
     tmp = tmp.reset_index(drop=True)
     sector_ret = tmp.groupby(["date", "industry"], sort=True)["ret"].mean().unstack("industry").sort_index()
     return sector_ret
+
+
+def compute_equal_weight_index_close(
+    df_price: pd.DataFrame,
+    *,
+    close_col: str = "close",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    base: float = 1.0,
+) -> pd.Series:
+    if not isinstance(df_price.index, pd.MultiIndex) or list(df_price.index.names)[:2] != ["date", "code"]:
+        raise ValueError("df_price 需为 MultiIndex(date, code)")
+    if close_col not in df_price.columns:
+        raise ValueError(f"df_price 缺少价格列 {close_col!r}")
+
+    df = df_price
+    if start_date or end_date:
+        s = pd.to_datetime(start_date, format="%Y%m%d", errors="coerce") if start_date else None
+        e = pd.to_datetime(end_date, format="%Y%m%d", errors="coerce") if end_date else None
+        dates = df.index.get_level_values("date")
+        m = pd.Series(True, index=df.index)
+        if s is not None and not pd.isna(s):
+            m &= dates >= s
+        if e is not None and not pd.isna(e):
+            m &= dates <= e
+        df = df.loc[m.to_numpy(dtype=bool), :]
+
+    close = pd.to_numeric(df[close_col], errors="coerce")
+    close = close.where(close > 0)
+    ret = close.groupby(level="code").pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+    ew_ret = ret.groupby(level="date").mean().sort_index()
+    ew_ret = ew_ret.fillna(0.0).astype("float64")
+    idx_close = (1.0 + ew_ret).cumprod() * float(base)
+    idx_close.name = "close"
+    return idx_close
+
+
+def load_self_equal_weight_ma_risk_signal(
+    df_price: pd.DataFrame,
+    ma_window: int,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame | None:
+    window = int(ma_window)
+    if window <= 0:
+        return None
+    start_s = str(start_date).strip()
+    end_s = str(end_date).strip()
+    if not start_s or not end_s:
+        return None
+
+    start_dt = pd.to_datetime(start_s, format="%Y%m%d", errors="coerce")
+    end_dt = pd.to_datetime(end_s, format="%Y%m%d", errors="coerce")
+    if pd.isna(start_dt) or pd.isna(end_dt):
+        return None
+    need_start = (start_dt - pd.Timedelta(days=max(60, window * 3))).strftime("%Y%m%d")
+
+    try:
+        close = compute_equal_weight_index_close(df_price, start_date=need_start, end_date=end_s)
+    except Exception:
+        return None
+    if close is None or len(close) == 0:
+        return None
+
+    close = close.sort_index()
+    ma = close.rolling(window=window, min_periods=window).mean()
+    out = pd.DataFrame({"close": close, "ma": ma})
+    out = out.loc[(out.index >= start_dt) & (out.index <= end_dt), :]
+    if len(out) == 0:
+        return None
+    out = out.shift(1)
+    out["risk_on"] = (out["close"] > out["ma"]).astype("float64")
+    out["risk_on"] = out["risk_on"].fillna(1.0).astype("float64")
+    return out
 
 
 def build_sector_index(sector_ret: pd.DataFrame, *, base: float = 1.0, fillna_return: float = 0.0) -> pd.DataFrame:

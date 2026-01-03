@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from ml_models import xgb_config as cfg
-from ml_models.model_functions._04_feature_engineering import apply_feature_filters, build_drop_factors
+from ml_models.model_functions._04_feature_engineering import apply_feature_filters, build_drop_factors, build_keep_factors
 
 
 def _parse_yyyymmdd(value: str | None) -> pd.Timestamp | None:
@@ -61,7 +61,7 @@ def build_tradable_mask(df_price: pd.DataFrame, min_turnover: float) -> pd.Serie
     return (cond_active & cond_no_limit_up & cond_liquid).rename("tradable_t")
 
 
-def _infer_factor_columns_to_read(factor_path: str, drop_factors: set[str]) -> list[str] | None:
+def _infer_factor_columns_to_read(factor_path: str, drop_factors: set[str], keep_factors: set[str]) -> list[str] | None:
     try:
         import pyarrow.parquet as pq
 
@@ -69,7 +69,7 @@ def _infer_factor_columns_to_read(factor_path: str, drop_factors: set[str]) -> l
     except Exception:
         return None
     candidate = [c for c in schema_cols if str(c) not in ("date", "code")]
-    selected = apply_feature_filters([str(c) for c in candidate], drop_factors)
+    selected = apply_feature_filters([str(c) for c in candidate], drop_factors, keep_factors)
     out = [c for c in selected if c in schema_cols]
     if "date" in schema_cols:
         out.append("date")
@@ -86,6 +86,10 @@ def _build_dataset_cache_key(args, *, factor_path: str, price_path: str, factor_
         use_default_drop_factors=bool(getattr(args, "use_default_drop_factors", True)),
         drop_factors_csv=getattr(args, "drop_factors", None),
     )
+    keep_factors = build_keep_factors(
+        use_default_keep_factors=bool(getattr(args, "use_default_keep_factors", True)),
+        keep_factors_csv=getattr(args, "keep_factors", None),
+    )
     payload = {
         "factor_path": os.path.abspath(factor_path),
         "factor_mtime_ns": int(getattr(fp_stat, "st_mtime_ns", int(fp_stat.st_mtime * 1e9))),
@@ -101,6 +105,7 @@ def _build_dataset_cache_key(args, *, factor_path: str, price_path: str, factor_
         "label_benchmark_method": str(getattr(args, "label_benchmark_method", cfg.DEFAULT_LABEL["label_benchmark_method"])),
         "dropna_features": bool(getattr(args, "dropna_features", False)),
         "drop_factors": sorted(list(drop_factors)),
+        "keep_factors": sorted(list(keep_factors)),
         "factor_cols": list(factor_cols) if factor_cols is not None else None,
     }
     s = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
@@ -120,7 +125,11 @@ def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.Data
         use_default_drop_factors=bool(getattr(args, "use_default_drop_factors", True)),
         drop_factors_csv=getattr(args, "drop_factors", None),
     )
-    factor_cols = _infer_factor_columns_to_read(factor_path, drop_factors=drop_factors)
+    keep_factors = build_keep_factors(
+        use_default_keep_factors=bool(getattr(args, "use_default_keep_factors", True)),
+        keep_factors_csv=getattr(args, "keep_factors", None),
+    )
+    factor_cols = _infer_factor_columns_to_read(factor_path, drop_factors=drop_factors, keep_factors=keep_factors)
     cache_key = _build_dataset_cache_key(args, factor_path=factor_path, price_path=price_path, factor_cols=factor_cols)
     output_dir = str(getattr(args, "output_dir", os.path.dirname(os.path.abspath(factor_path))))
     cache_dir = os.path.join(output_dir, "_dataset_cache")

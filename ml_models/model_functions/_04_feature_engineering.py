@@ -17,11 +17,22 @@ def build_drop_factors(use_default_drop_factors: bool, drop_factors_csv: str | N
     return drop
 
 
-def apply_feature_filters(features: list[str], drop_factors: set[str]) -> list[str]:
+def build_keep_factors(use_default_keep_factors: bool, keep_factors_csv: str | None) -> set[str]:
+    keep: set[str] = set()
+    if bool(use_default_keep_factors):
+        keep.update(getattr(cfg, "DEFAULT_KEEP_FACTORS", []))
+    keep.update(parse_csv_list(keep_factors_csv))
+    return keep
+
+
+def apply_feature_filters(features: list[str], drop_factors: set[str], keep_factors: set[str] | None = None) -> list[str]:
     """对特征列表应用剔除规则（drop list + turnover_* 特殊规则）。"""
     out: list[str] = []
+    keep = keep_factors or set()
     for f in features:
         sf = str(f)
+        if keep and sf not in keep:
+            continue
         if sf in drop_factors:
             continue
         if ("ret_next" in sf) or sf.endswith("_next"):

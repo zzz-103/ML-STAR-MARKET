@@ -26,6 +26,7 @@ from ml_models.model_functions._04_feature_engineering import (
     apply_feature_filters,
     build_constraints_dict,
     build_drop_factors,
+    build_keep_factors,
     build_monotone_constraints,
 )
 from ml_models.model_functions._06_data_preprocessing import prepare_dataset
@@ -37,6 +38,7 @@ from ml_models.model_functions._14_overfit import run_overfit_check, run_overfit
 from ml_models.model_functions._15_visualization import build_ascii_report
 from ml_models.model_functions._16_run_params import format_run_params
 from ml_models.model_functions._17_quick_eval import run_quick_evaluation
+from ml_models.model_functions._18_factors_quick_review import write_factors_quick_review
 
 
 def _attach_derived_defaults(args) -> None:
@@ -55,11 +57,8 @@ def _auto_enable_overfit_and_quick_eval(args) -> None:
         return
     if bool(getattr(args, "overfit_check_only", False)) or bool(getattr(args, "quick_eval_only", False)):
         return
-    if bool(getattr(args, "overfit_check", False)) or bool(getattr(args, "quick_eval", False)):
+    if bool(getattr(args, "quick_eval", False)):
         return
-    args.overfit_check = True
-    args.overfit_along = True
-    args.overfit_range = True
     args.quick_eval = True
 
 
@@ -318,7 +317,11 @@ def run(argv: list[str] | None = None) -> None:
         use_default_drop_factors=bool(getattr(args, "use_default_drop_factors", True)),
         drop_factors_csv=getattr(args, "drop_factors", None),
     )
-    final_features = apply_feature_filters(raw_features, drop_factors)
+    keep_factors = build_keep_factors(
+        use_default_keep_factors=bool(getattr(args, "use_default_keep_factors", True)),
+        keep_factors_csv=getattr(args, "keep_factors", None),
+    )
+    final_features = apply_feature_filters(raw_features, drop_factors, keep_factors)
     log_section(logger, "特征工程 (Features)")
     logger.info("最终特征数=%d 示例=%s", int(len(final_features)), final_features[:8])
     constraints_dict = build_constraints_dict(
@@ -411,8 +414,7 @@ def run(argv: list[str] | None = None) -> None:
     log_section(logger, "模型评估 (Evaluation)")
     eval_map = _compute_temp_eval(df_ml, temp_dir=temp_dir, top_k=int(getattr(args, "top_k")))
     report = build_ascii_report("临时分数评估 (基于同日ret_next)", eval_map)
-    for line in report.splitlines():
-        logger.info("%s", line)
+    logger.info("\n%s", report.rstrip())
     try:
         out_eval = os.path.join(save_dir, "eval_report.txt")
         with open(out_eval, "w", encoding="utf-8") as f:
@@ -427,6 +429,16 @@ def run(argv: list[str] | None = None) -> None:
         df_imp, meta = res
         meta["dropped_factors"] = sorted(list(drop_factors))
         save_factor_importance(df_imp, meta, args, logger=logger)
+        try:
+            out_txt = write_factors_quick_review(
+                df_imp,
+                df_ml,
+                model_daily_ic=eval_map.get("daily_ic", None),
+                meta=meta,
+            )
+            logger.info("已刷新 quick review=%s", out_txt)
+        except Exception as e:
+            logger.info("quick review 生成失败: %s", e)
     else:
         logger.info("跳过因子重要性计算")
 

@@ -432,6 +432,7 @@ def _compute_daily_from_weights(
     df_price: pd.DataFrame,
     risk_data_path: str,
     risk_index_code: str,
+    bench_method: str,
     enable_cache: bool,
     paths: QuickEvalPaths,
     risk_free_annual: float,
@@ -464,6 +465,7 @@ def _compute_daily_from_weights(
         "price_data_path": str(getattr(df_price, "_source_path", "")),
         "risk_data_path": str(risk_data_path),
         "risk_index_code": str(risk_index_code),
+        "bench_method": str(bench_method),
         "risk_free_annual": float(risk_free_annual),
         "fee_rate": float(fee_rate),
         "slippage": float(slippage),
@@ -474,7 +476,7 @@ def _compute_daily_from_weights(
     can_reuse = False
     if enable_cache and cache_df is not None and cache_meta is not None:
 
-        keys = ["weights_dir", "risk_data_path", "risk_index_code", "fee_rate", "slippage"]
+        keys = ["weights_dir", "risk_data_path", "risk_index_code", "bench_method", "fee_rate", "slippage"]
         can_reuse = all(str(cache_meta.get(k)) == str(meta.get(k)) for k in keys)
 
     cached_map: dict[pd.Timestamp, dict[str, float]] = {}
@@ -518,8 +520,18 @@ def _compute_daily_from_weights(
     rr_full = rr_full.fillna(0.0).replace([np.inf, -np.inf], 0.0)
 
     idx = pd.IndexSlice
-    bench_close = _load_index_close_series(risk_data_path, risk_index_code, start_s, end_s)
-    bench_ret = bench_close.pct_change().astype("float64")
+    if str(bench_method).lower() in ("self_eq", "self_equal_weight", "self_equal"):
+        close = pd.to_numeric(df_price.get("close", np.nan), errors="coerce").astype(float)
+        close = close.where(close > 0)
+        ret = close.groupby(level="code").pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+        bench_ret = ret.groupby(level="date").mean().sort_index().fillna(0.0).astype("float64")
+        start_dt = pd.to_datetime(start_s, format="%Y%m%d", errors="coerce")
+        end_dt = pd.to_datetime(end_s, format="%Y%m%d", errors="coerce")
+        if not pd.isna(start_dt) and not pd.isna(end_dt):
+            bench_ret = bench_ret.loc[(bench_ret.index >= start_dt) & (bench_ret.index <= end_dt)]
+    else:
+        bench_close = _load_index_close_series(risk_data_path, risk_index_code, start_s, end_s)
+        bench_ret = bench_close.pct_change().astype("float64")
 
     rows: list[dict[str, object]] = []
     last_w = pd.Series(dtype="float64")
@@ -1183,7 +1195,7 @@ def _render_html_report(
   {passive_html}
 
   <div class="notes">
-    <strong>说明:</strong> 基准日收益采用配置中 risk_data_path 指定指数的收盘价涨跌幅。策略收益采用 price_data_path 数据的 open-to-next-open 收益，并应用当日权重。净收益已扣除基于调仓权重的双边交易手续费。
+    <strong>说明:</strong> 基准日收益：当 bench_method=self_eq 时，采用 price_data_path 中全样本等权 close-to-close 平均涨跌幅；否则采用 risk_data_path 指定指数的收盘价涨跌幅。策略收益采用 price_data_path 数据的 open-to-next-open 收益，并应用当日权重。净收益已扣除基于调仓权重的双边交易手续费。
   </div>
 </div>
 </body>
@@ -1213,12 +1225,15 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
 
     risk_data_path = str(getattr(args, "risk_data_path"))
     risk_index_code = str(getattr(args, "risk_index_code"))
+    timing_method = str(getattr(args, "timing_method", "index_ma20"))
+    bench_method = "self_eq" if (timing_method == "self_eq_ma20" or str(risk_index_code).lower() in ("self_eq", "self_equal_weight", "self_equal")) else "index_close"
 
     df_daily, metrics, bench_metrics = _compute_daily_from_weights(
         weights_dir=weights_dir,
         df_price=df_price,
         risk_data_path=risk_data_path,
         risk_index_code=risk_index_code,
+        bench_method=bench_method,
         enable_cache=enable_cache,
         paths=paths,
         risk_free_annual=risk_free,
@@ -1254,7 +1269,7 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
     source_info = {
         "权重目录 (Weights Dir)": str(weights_dir),
         "价格数据 (Price Data)": str(getattr(df_price, "_source_path", "InMemory")),
-        "风控基准 (Risk Data)": f"{risk_data_path} (Index: {risk_index_code})",
+        "风控基准 (Risk Data)": f"{risk_data_path} (Index: {risk_index_code}, BenchMethod: {bench_method})",
     }
 
     _render_html_report(

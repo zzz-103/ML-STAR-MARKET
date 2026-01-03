@@ -23,6 +23,23 @@ class ConsoleFormatter(logging.Formatter):
         return f"[{record.levelname}] {record.getMessage()}"
 
 
+class FileFormatter(logging.Formatter):
+    def __init__(self) -> None:
+        super().__init__()
+        self._is_first_record = True
+        self._first_formatter = logging.Formatter(
+            fmt="%(asctime)s.%(msecs)03d | %(levelname)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        self._rest_formatter = logging.Formatter(fmt="%(levelname)s | %(message)s")
+
+    def format(self, record):
+        if self._is_first_record:
+            self._is_first_record = False
+            return self._first_formatter.format(record)
+        return self._rest_formatter.format(record)
+
+
 def _is_console_handler(h: logging.Handler) -> bool:
     return isinstance(h, logging.StreamHandler) and (not isinstance(h, logging.FileHandler))
 
@@ -54,11 +71,7 @@ def build_logger(log_dir: str, run_name: str) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    # 文件日志：保持详尽，包含毫秒时间戳和级别
-    file_fmt = logging.Formatter(
-        fmt="%(asctime)s.%(msecs)03d | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    file_fmt = FileFormatter()
 
     # 终端日志：使用自定义精简格式
     console_fmt = ConsoleFormatter()
@@ -81,9 +94,7 @@ def build_logger(log_dir: str, run_name: str) -> logging.Logger:
 
 def log_section(logger: logging.Logger, title: str) -> None:
     """输出分段标题，便于在终端与日志文件中定位运行阶段。"""
-    # 在 section 标题中显式包含时间，满足“模块开始生成时间戳”的需求
-    ts = datetime.now().strftime("%H:%M:%S")
-    logger.info(f"[{ts}] ========== {title} ==========")
+    logger.info("========== %s ==========", str(title))
 
 
 def log_data_grid(logger: logging.Logger, data: dict, title: str = "Config") -> None:
@@ -131,14 +142,12 @@ def log_data_grid(logger: logging.Logger, data: dict, title: str = "Config") -> 
         console_lines = lines[:kept]
         console_lines.append(f"│ ... (省略{omitted}行，详见日志文件)")
 
+    file_block = "\n".join(lines)
+    console_block = "\n".join(console_lines)
     for h in list(getattr(logger, "handlers", [])):
         if _is_file_handler(h):
-            for line in lines:
-                _emit_line(logger, h, line)
+            _emit_line(logger, h, file_block)
         elif _is_console_handler(h):
-            for line in console_lines:
-                _emit_line(logger, h, line)
+            _emit_line(logger, h, console_block)
         else:
-            for line in lines:
-                _emit_line(logger, h, line)
-
+            _emit_line(logger, h, file_block)

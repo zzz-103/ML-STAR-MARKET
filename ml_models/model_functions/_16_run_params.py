@@ -22,7 +22,15 @@ def format_run_params(args, objective: str, model_kind: str, timing_method: str)
     timing_cn = timing_method
     if timing_method == "index_ma20":
         timing_cn = "指数MA20"
+    elif timing_method == "self_eq_ma20":
+        timing_cn = "等权指数MA20"
+    elif timing_method == "split_index_ma20":
+        timing_cn = "分板块指数MA20"
     
+    risk_display = str(getattr(args, "risk_index_code", ""))
+    if timing_method == "split_index_ma20":
+        risk_display = f"300:{str(getattr(args, 'risk_index_code_300', '399006'))} 688:{str(getattr(args, 'risk_index_code_688', '000688'))}"
+
     s1 = (
         f"[组合配置] "
         f"训练窗口={int(getattr(args, 'train_window', 0))}日 | "
@@ -33,7 +41,7 @@ def format_run_params(args, objective: str, model_kind: str, timing_method: str)
         f"惯性={float(getattr(args, 'inertia_ratio', 0.0)):.3g} | "
         f"止损排名={int(getattr(args, 'emergency_exit_rank', 0))} | "
         f"择时={timing_cn} | "
-        f"风控指数={str(getattr(args, 'risk_index_code', ''))} | "
+        f"风控指数={risk_display} | "
         f"MA={int(getattr(args, 'risk_ma_window', 0))} | "
         f"权重={sw_mode_cn}"
     )

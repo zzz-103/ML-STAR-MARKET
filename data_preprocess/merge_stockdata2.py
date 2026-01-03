@@ -524,6 +524,8 @@ def load_idx_idxstk_as_df(
     fixed_cols = ["Stkcd", "Idxstk01", "Idxstk02", "Idxstk03", "Idxstk06", "Idxstk07"]
 
     for pth in paths:
+        if not os.path.exists(pth):
+            continue
         with open(pth, "r", newline="", encoding="utf-8") as f:
             reader0 = csv.reader(f)
             first = next(reader0, None)
@@ -591,6 +593,8 @@ def load_stk_mkt_dalyr_as_df(
         return _norm_csv_field_name(c) in keep_norm
 
     for pth in paths:
+        if not os.path.exists(pth):
+            continue
         with open(pth, "r", newline="", encoding="utf-8") as f:
             reader0 = csv.reader(f)
             first = next(reader0, None)
@@ -676,6 +680,8 @@ def load_fi_t10_as_df(
         return _norm_csv_field_name(c) in keep_norm
 
     for pth in paths:
+        if not os.path.exists(pth):
+            continue
         with open(pth, "r", newline="", encoding="utf-8") as f:
             reader0 = csv.reader(f)
             first = next(reader0, None)
@@ -837,6 +843,10 @@ def merge_base_with_idxstk_to_parquet(
         start_date=start_date,
         end_date=end_date,
     )
+    idx_df = load_idx_idxstk_as_df(
+        csv_paths=idxstk_csv_paths,
+        prefixes=prefixes,
+    )
     val_df = load_stk_mkt_dalyr_as_df(
         csv_paths=valuation_csv_paths,
         prefixes=prefixes,
@@ -851,14 +861,16 @@ def merge_base_with_idxstk_to_parquet(
     )
 
     base_df = base_df.drop_duplicates(subset=["date", "code"], keep="last")
+    idx_df = idx_df.drop_duplicates(subset=["date", "code"], keep="last")
     val_df = val_df.drop_duplicates(subset=["date", "code"], keep="last")
     sc_df = sc_df.drop_duplicates(subset=["date", "code"], keep="last")
 
     base_idx = base_df.set_index(["date", "code"]).sort_index()
+    idx_idx = idx_df.set_index(["date", "code"]).sort_index()
     val_idx = val_df.set_index(["date", "code"]).sort_index()
     sc_idx = sc_df.set_index(["date", "code"]).sort_index()
 
-    merged = base_idx.join(val_idx, how="left").join(sc_idx, how="left")
+    merged = base_idx.join(idx_idx, how="left").join(val_idx, how="left").join(sc_idx, how="left")
     base_cols = [
         "preclose",
         "open",
@@ -873,6 +885,9 @@ def merge_base_with_idxstk_to_parquet(
         "open_interest",
     ]
     keep_cols = [c for c in base_cols if c in merged.columns]
+    for c in ("Idxstk02", "Idxstk03", "Idxstk06", "Idxstk07"):
+        if c in merged.columns:
+            keep_cols.append(c)
     for c in ("CirculatedMarketValue", "Turnover"):
         if c in merged.columns:
             keep_cols.append(c)

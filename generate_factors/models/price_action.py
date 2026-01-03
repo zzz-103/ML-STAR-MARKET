@@ -31,9 +31,6 @@ def run(df):
     
     # --- B. 累计动量 (Momentum / ROC) ---
     # 过去 N 天的总涨幅
-    output['roc_5'] = close_safe.groupby(level='code').pct_change(5, fill_method=None)
-    output['roc_10'] = close_safe.groupby(level='code').pct_change(10, fill_method=None)
-    output['roc_20'] = close_safe.groupby(level='code').pct_change(20, fill_method=None) # 月度动量
     
     # --- C. K线形态 (Candle Structure) ---
     # 为了消除股价绝对值影响，全部除以 Close 进行归一化

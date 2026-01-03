@@ -106,13 +106,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--industry-bull-ma-window", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_bull_ma_window", 60))
     parser.add_argument("--industry-bull-max-weight", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_bull_max_weight", 0.60))
 
-    parser.add_argument("--timing-method", choices=["index_ma20", "index_ma_dual", "score", "none"], default=cfg.DEFAULT_TIMING["timing_method"])
+    parser.add_argument(
+        "--timing-method",
+        choices=["index_ma20", "index_ma_dual", "self_eq_ma20", "split_index_ma20", "score", "none"],
+        default=cfg.DEFAULT_TIMING["timing_method"],
+    )
     parser.add_argument("--timing-threshold", type=float, default=cfg.DEFAULT_TIMING["timing_threshold"])
     parser.add_argument("--timing-bad-exposure", type=float, default=cfg.DEFAULT_TIMING["timing_bad_exposure"])
     parser.add_argument("--timing-enter-threshold", type=float, default=cfg.DEFAULT_TIMING["timing_enter_threshold"])
     parser.add_argument("--timing-exit-threshold", type=float, default=cfg.DEFAULT_TIMING["timing_exit_threshold"])
     parser.add_argument("--timing-hysteresis", type=float, default=cfg.DEFAULT_TIMING["timing_hysteresis"])
     parser.add_argument("--risk-index-code", default=cfg.DEFAULT_TIMING["risk_index_code"])
+    parser.add_argument("--risk-index-code-300", default=cfg.DEFAULT_TIMING.get("risk_index_code_300", "399006"))
+    parser.add_argument("--risk-index-code-688", default=cfg.DEFAULT_TIMING.get("risk_index_code_688", "000688"))
     parser.add_argument("--risk-ma-window", type=int, default=cfg.DEFAULT_TIMING["risk_ma_window"])
     parser.add_argument("--risk-ma-fast-window", type=int, default=cfg.DEFAULT_TIMING["risk_ma_fast_window"])
     parser.add_argument("--risk-ma-slow-window", type=int, default=cfg.DEFAULT_TIMING["risk_ma_slow_window"])
@@ -125,6 +131,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--use-default-drop-factors", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--drop-factors", default=None)
+    parser.add_argument("--use-default-keep-factors", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--keep-factors", default=None)
     parser.add_argument(
         "--label-benchmark-universe",
         default=cfg.DEFAULT_LABEL["label_benchmark_universe"],

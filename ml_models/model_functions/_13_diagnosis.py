@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from ml_models import xgb_config as cfg
 from ml_models.model_functions._02_parsing_utils import parse_yyyymmdd
-from ml_models.model_functions._04_feature_engineering import apply_feature_filters, build_constraints_dict, build_drop_factors
+from ml_models.model_functions._04_feature_engineering import apply_feature_filters, build_constraints_dict, build_drop_factors, build_keep_factors
 from ml_models.model_functions._06_data_preprocessing import build_tradable_mask, ensure_factors_index
 
 
@@ -71,7 +71,11 @@ def diagnose_factors(args) -> str:
         use_default_drop_factors=bool(getattr(args, "use_default_drop_factors", True)),
         drop_factors_csv=getattr(args, "drop_factors", None),
     )
-    factor_cols = apply_feature_filters(list(df_factors.columns), drop_factors)
+    keep_factors = build_keep_factors(
+        use_default_keep_factors=bool(getattr(args, "use_default_keep_factors", True)),
+        keep_factors_csv=getattr(args, "keep_factors", None),
+    )
+    factor_cols = apply_feature_filters(list(df_factors.columns), drop_factors, keep_factors)
     df_factors = df_factors[factor_cols]
     factor_cols = df_factors.select_dtypes(include=[np.number]).columns.tolist()
     if len(factor_cols) == 0:

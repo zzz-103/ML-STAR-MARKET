@@ -20,6 +20,7 @@ from ml_models.model_functions._07_risk_signals import (
     compute_sector_momentum_rank,
     load_index_dual_ma_risk_signal,
     load_index_ma_risk_signal,
+    load_self_equal_weight_ma_risk_signal,
     load_stock_industry_map,
 )
 
@@ -54,7 +55,9 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
     end_s = os.path.basename(temp_files[-1]).replace(".parquet", "")
 
     risk_df = None
-    if timing_method in ("index_ma20", "index_ma_dual"):
+    risk_df_300 = None
+    risk_df_688 = None
+    if timing_method in ("index_ma20", "index_ma_dual", "self_eq_ma20", "split_index_ma20"):
         if timing_method == "index_ma20":
             risk_df = load_index_ma_risk_signal(
                 str(getattr(args, "risk_data_path")),
@@ -66,7 +69,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             if risk_df is None or len(risk_df) == 0:
                 logger.info("risk_data_missing timing_fallback=none method=index_ma20")
                 timing_method = "none"
-        else:
+        elif timing_method == "index_ma_dual":
             risk_df = load_index_dual_ma_risk_signal(
                 str(getattr(args, "risk_data_path")),
                 str(getattr(args, "risk_index_code")),
@@ -77,6 +80,34 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             )
             if risk_df is None or len(risk_df) == 0:
                 logger.info("risk_data_missing timing_fallback=none method=index_ma_dual")
+                timing_method = "none"
+        elif timing_method == "self_eq_ma20":
+            risk_df = load_self_equal_weight_ma_risk_signal(
+                df_price,
+                int(getattr(args, "risk_ma_window")),
+                start_s,
+                end_s,
+            )
+            if risk_df is None or len(risk_df) == 0:
+                logger.info("risk_data_missing timing_fallback=none method=self_eq_ma20")
+                timing_method = "none"
+        else:
+            risk_df_300 = load_index_ma_risk_signal(
+                str(getattr(args, "risk_data_path")),
+                str(getattr(args, "risk_index_code_300", "399006")),
+                int(getattr(args, "risk_ma_window")),
+                start_s,
+                end_s,
+            )
+            risk_df_688 = load_index_ma_risk_signal(
+                str(getattr(args, "risk_data_path")),
+                str(getattr(args, "risk_index_code_688", "000688")),
+                int(getattr(args, "risk_ma_window")),
+                start_s,
+                end_s,
+            )
+            if (risk_df_300 is None or len(risk_df_300) == 0) and (risk_df_688 is None or len(risk_df_688) == 0):
+                logger.info("risk_data_missing timing_fallback=none method=split_index_ma20")
                 timing_method = "none"
 
     bull_df = None
@@ -154,6 +185,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
     history_scores: list[pd.Series] = []
     days_since_last_trade = int(getattr(args, "rebalance_period"))
     market_risk_on = True
+    market_risk_on_300 = True
+    market_risk_on_688 = True
     industry_riskoff_state: dict[str, bool] = {}
     idx = pd.IndexSlice
 
@@ -177,9 +210,10 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
 
         ranked_raw = mean_scores.sort_values(ascending=False)
         timing_scale = 1.0
+        timing_scale_by_code: pd.Series | None = None
         if timing_method == "none":
             timing_scale = 1.0
-        elif timing_method == "index_ma20":
+        elif timing_method in ("index_ma20", "self_eq_ma20"):
             risk_on_now = market_risk_on
             if risk_df is not None:
                 try:
@@ -222,6 +256,58 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 logger.info("risk_switch date=%s risk_on=%d", date_str, int(risk_on_now))
             market_risk_on = risk_on_now
             timing_scale = 1.0 if market_risk_on else float(getattr(args, "timing_bad_exposure", 0.0))
+        elif timing_method == "split_index_ma20":
+            buf = float(getattr(args, "risk_ma_buffer", 0.0))
+            risk_on_300 = market_risk_on_300
+            if risk_df_300 is not None:
+                try:
+                    row = risk_df_300.loc[target_date, :]
+                    c = float(row["close"]) if hasattr(row, "__getitem__") else np.nan
+                    ma = float(row["ma"]) if hasattr(row, "__getitem__") else np.nan
+                    if np.isfinite(c) and np.isfinite(ma) and ma > 0:
+                        if market_risk_on_300:
+                            if c < ma * (1.0 - buf):
+                                risk_on_300 = False
+                        else:
+                            if c > ma * (1.0 + buf):
+                                risk_on_300 = True
+                except Exception:
+                    pass
+            if risk_on_300 != market_risk_on_300:
+                logger.info("risk_switch_300 date=%s risk_on=%d", date_str, int(risk_on_300))
+            market_risk_on_300 = risk_on_300
+
+            risk_on_688 = market_risk_on_688
+            if risk_df_688 is not None:
+                try:
+                    row = risk_df_688.loc[target_date, :]
+                    c = float(row["close"]) if hasattr(row, "__getitem__") else np.nan
+                    ma = float(row["ma"]) if hasattr(row, "__getitem__") else np.nan
+                    if np.isfinite(c) and np.isfinite(ma) and ma > 0:
+                        if market_risk_on_688:
+                            if c < ma * (1.0 - buf):
+                                risk_on_688 = False
+                        else:
+                            if c > ma * (1.0 + buf):
+                                risk_on_688 = True
+                except Exception:
+                    pass
+            if risk_on_688 != market_risk_on_688:
+                logger.info("risk_switch_688 date=%s risk_on=%d", date_str, int(risk_on_688))
+            market_risk_on_688 = risk_on_688
+
+            bad = float(getattr(args, "timing_bad_exposure", 0.0))
+            scale_300 = 1.0 if market_risk_on_300 else bad
+            scale_688 = 1.0 if market_risk_on_688 else bad
+            codes = ranked_raw.index.astype("string")
+            is_300 = codes.str.startswith("300", na=False)
+            is_688 = codes.str.startswith("688", na=False)
+            scale = pd.Series(1.0, index=codes, dtype="float64")
+            if bool(is_300.any()):
+                scale.loc[is_300] = float(scale_300)
+            if bool(is_688.any()):
+                scale.loc[is_688] = float(scale_688)
+            timing_scale_by_code = scale
         else:
             top_n = min(30, len(ranked_raw))
             top30_mean_score = float(ranked_raw.head(top_n).mean()) if top_n > 0 else np.nan
@@ -240,6 +326,18 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                     if top30_mean_score >= enter_thr:
                         market_risk_on = True
             timing_scale = 1.0 if market_risk_on else float(getattr(args, "timing_bad_exposure"))
+
+        def _apply_timing(w: pd.Series) -> pd.Series:
+            if w is None or len(w) == 0:
+                return pd.Series(dtype="float64")
+            if timing_scale_by_code is not None:
+                s = timing_scale_by_code.reindex(w.index.astype("string")).fillna(1.0).astype("float64")
+                out = (w.astype("float64") * s).astype("float64")
+                out = out[out > 0.0]
+                return out
+            if timing_scale <= 0.0:
+                return w.iloc[0:0].copy()
+            return (w * float(timing_scale)).astype("float64")
 
         band_thr = float(getattr(args, "band_threshold", 0.0))
         band_thr = 0.0 if not np.isfinite(band_thr) else max(0.0, band_thr)
@@ -281,11 +379,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         if not is_rebalance_day:
             output_path = os.path.join(save_dir, f"{date_str}.csv")
             if str(getattr(args, "non_rebalance_action", "empty")).lower() == "carry":
-                out_w = prev_w.copy()
-                if timing_scale <= 0.0:
-                    out_w = out_w.iloc[0:0].copy()
-                else:
-                    out_w = (out_w * float(timing_scale)).astype("float64")
+                out_w = _apply_timing(prev_w.copy())
                 out_df = out_w.rename_axis("code").rename("weight").reset_index()
                 out_df.to_csv(output_path, index=False, header=False, float_format="%.10f")
             else:
@@ -646,10 +740,10 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         days_since_last_trade = 1
 
         output_path = os.path.join(save_dir, f"{date_str}.csv")
-        if timing_scale <= 0.0 or len(prev_w) == 0:
+        out_w = _apply_timing(prev_w)
+        if len(out_w) == 0:
             with open(output_path, "w", encoding="utf-8"):
                 pass
         else:
-            out_w = (prev_w * float(timing_scale)).astype("float64")
             out_df = out_w.rename_axis("code").rename("weight").reset_index()
             out_df.to_csv(output_path, index=False, header=False, float_format="%.10f")

@@ -19,6 +19,9 @@ RAW_INPUT_PATH = str(PROJECT_ROOT / "pre_data" / "merged_20200101_20241231.csv")
 CLEANED_DATA_DIR = str(PROJECT_ROOT / "pre_data")
 CLEANED_FILE_NAME = "cleaned_stock_data.parquet"
 CLEANED_DATA_PATH = os.path.join(CLEANED_DATA_DIR, CLEANED_FILE_NAME)
+_PREFERRED_CLEANED_DATA_PATH = str(PROJECT_ROOT / "pre_data" / "cleaned_stock_data_300_688_with_idxstk_with_industry.parquet")
+if os.path.exists(_PREFERRED_CLEANED_DATA_PATH):
+    CLEANED_DATA_PATH = _PREFERRED_CLEANED_DATA_PATH
 
 # 3. 因子输出根目录
 OUTPUT_ROOT = str(PROJECT_ROOT / "factors_data")
@@ -39,6 +42,15 @@ SUMMARY_PATH = str(Path(__file__).resolve().parent / "factors_summary.txt")
 QUALITY_START = "20230101"
 QUALITY_END = "20241231"
 MASKED_FACTORS = {"ff_mkt", "ff_hml", "ff_smb", "ff_smb_cov_60"}
+KEEP_FACTORS = {
+    "pv_corr",
+    "roc_20",
+    "vol_20",
+    "f_price_vol_corr_10",
+    "f_vwap_bias",
+    "f_intraday_reversal",
+    "f_candle_strength",
+}
 FOCUS_STOCK_POOL_PREFIXES = ("300", "688")
 QUALITY_HORIZON_DAYS = 5
 
@@ -73,25 +85,22 @@ def merge_fundamentals(price_path: str, factor_path: str, output_path: str) -> s
     df_price = df_price.dropna(subset=["date", "code"])
 
     print("2. 计算/提取基本面因子...")
-    fund_cols = ["EP_ttm", "BP", "SP_ttm"]
+    fund_cols = ["BP", "SP_ttm"]
     missing = [c for c in fund_cols if c not in df_price.columns]
     if missing:
         raise ValueError(f"价格/基本面数据缺少列: {missing}")
 
-    if "pcf_net_ttm" in df_price.columns:
-        denom = pd.to_numeric(df_price["pcf_net_ttm"], errors="coerce").replace(0, np.nan)
-        df_price["CFP_ttm"] = 1.0 / denom
-        fund_cols.append("CFP_ttm")
-    else:
-        print("警告: 未找到 pcf_net_ttm 列，跳过 CFP_ttm 计算")
-
     df_fund = df_price[["date", "code"] + fund_cols].copy()
     for col in fund_cols:
         df_fund[col] = pd.to_numeric(df_fund[col], errors="coerce")
-        lower = df_fund[col].quantile(0.01)
-        upper = df_fund[col].quantile(0.99)
-        if np.isfinite(lower) and np.isfinite(upper) and upper >= lower:
-            df_fund[col] = df_fund[col].clip(lower, upper)
+        q = df_fund.groupby("date", sort=False)[col].quantile([0.01, 0.99]).unstack(level=-1)
+        q.columns = ["q01", "q99"]
+        df_fund = df_fund.join(q, on="date")
+        m = np.isfinite(df_fund["q01"].to_numpy()) & np.isfinite(df_fund["q99"].to_numpy()) & (df_fund["q99"] >= df_fund["q01"])
+        if bool(m.any()):
+            v = df_fund[col]
+            df_fund.loc[m, col] = v.loc[m].clip(lower=df_fund.loc[m, "q01"], upper=df_fund.loc[m, "q99"])
+        df_fund = df_fund.drop(columns=["q01", "q99"])
 
     print(f"3. 加载现有因子数据: {factor_path}")
     df_factors = pd.read_parquet(factor_path)
@@ -541,6 +550,10 @@ def build_all_factors_parquet(output_root, start_date, end_date):
     merged = None
     included = 0
     for factor_name, factor_dir in factor_dirs:
+        if str(factor_name) in MASKED_FACTORS:
+            continue
+        if KEEP_FACTORS and (str(factor_name) not in KEEP_FACTORS):
+            continue
         expected = os.path.join(factor_dir, f"{factor_name}_{start_date}_{end_date}.csv")
         if os.path.exists(expected):
             csv_path = expected
@@ -781,6 +794,10 @@ def main():
             if df_result is None or df_result.empty:
                 continue
             for factor_name in df_result.columns:
+                if str(factor_name) in MASKED_FACTORS:
+                    continue
+                if KEEP_FACTORS and str(factor_name) not in KEEP_FACTORS:
+                    continue
                 found.add(str(factor_name))
         for f in sorted(found):
             print(f)
@@ -817,6 +834,10 @@ def main():
             # 处理该模型下的每一个因子列
             for factor_name in df_result.columns:
                 if selected_factors_set is not None and str(factor_name) not in selected_factors_set:
+                    continue
+                if str(factor_name) in MASKED_FACTORS:
+                    continue
+                if KEEP_FACTORS and str(factor_name) not in KEEP_FACTORS:
                     continue
                 _, out_path = get_factor_output_path(str(factor_name), s_date, e_date)
                 if (not args.force) and os.path.exists(out_path):

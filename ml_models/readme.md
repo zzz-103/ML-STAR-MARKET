@@ -96,8 +96,8 @@ graph TD
 脚本内置了固定路径（如需迁移，可直接在脚本顶部改常量）：
 
 - 因子数据：`/Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_with_fundamentals.parquet`
-- 价格数据：`/Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk.parquet`
-- 风控数据（当 `--timing-method index_ma20/index_ma_dual` 时使用）：`/Users/zhuzhuxia/Documents/SZU_w4/pre_data/merged_20200101_20241231.csv`（读取指数 `close` 计算 MA，并默认用前一交易日信号）
+- 价格数据：`/Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk_with_industry.parquet`
+- 风控数据（当 `--timing-method index_ma20/index_ma_dual/split_index_ma20` 时使用；或 QuickEval 选择“指数基准”时使用）：`/Users/zhuzhuxia/Documents/SZU_w4/pre_data/merged_20200101_20241231.csv`（读取指数 `close` 计算 MA，并默认用前一交易日信号）
 
 期望格式：
 
@@ -140,9 +140,16 @@ graph TD
 python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
   --start-date 20230101 \
   --end-date 20241231 \
+  --timing-method index_ma20 \
+  --risk-index-code 399006
   --n-workers 8 \
   --quick-eval
 ```
+
+说明：
+
+- 默认已启用“自算全样本等权指数 MA20”择时：`--timing-method self_eq_ma20`，并把 `risk_index_code` 设为 `self_eq`（见 `xgb_config.py`）。
+- 该默认择时不依赖外部指数数据（只用 price_data 的全样本 close 计算等权指数与 MA，并使用前一交易日信号，避免同日未来信息）。
 
 如果你希望关闭行业相关逻辑（不做行业配额/行业风控），可以加：
 
@@ -150,9 +157,20 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
 python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
   --start-date 20230101 \
   --end-date 20241231 \
+  --timing-method index_ma20 \
+  --risk-index-code 399006 \
   --n-workers 8 \
   --quick-eval \
   --no-industry-enable
+```
+
+如果你想复测“原先的指数 MA20”（创业板指 399006）而不训练（只复测已有权重文件）：
+
+```bash
+python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
+  --quick-eval-only \
+  --timing-method index_ma20 \
+  --risk-index-code 399006
 ```
 
 ### 行业模块（可选）
@@ -208,7 +226,7 @@ log_file=/Users/zhuzhuxia/Documents/SZU_w4/ml_results/logs/xgb_knn_runner_202601
 │ ... (省略3行，详见日志文件)
 ┌── 模型参数
 │ blend_knn_weight: 0.3   blend_xgb_weight: 0.7   knn_neighbors: 50   learning_rate: 0.01
-│ max_depth: 4   n_estimators: 200   reg_lambda: 10.0   subsample: 0.7   use_constraints: True
+│ max_depth: 4   n_estimators: 200   reg_lambda: 10.0   subsample: 0.7   use_constraints: False
 │ ... (省略1行，详见日志文件)
 ┌── 训练设置
 │ decay_anchor_days: 30   decay_half_life_days: 60   decay_min_weight: 0.1
@@ -219,14 +237,14 @@ log_file=/Users/zhuzhuxia/Documents/SZU_w4/ml_results/logs/xgb_knn_runner_202601
 │ industry_ma_riskoff_buffer: 0.01   industry_ma_window: 20   industry_max_weight: 0.3
 │ ... (省略4行，详见日志文件)
 ┌── 择时参数
-│ risk_index_code: 399006   risk_ma_buffer: 0.005   risk_ma_fast_window: 5
+│ risk_index_code: self_eq   risk_ma_buffer: 0.005   risk_ma_fast_window: 5
 │ risk_ma_slow_window: 20   risk_ma_window: 20   timing_bad_exposure: 0.4
 │ ... (省略1行，详见日志文件)
 [01:02:25] ========== 数据集处理 (Dataset) ==========
 step=load_factors path=/Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_with_fundamentals.parquet
 泄漏检查 gap=6 | 标签最远=+5日 | 安全gap>=6 | 风险=0 | 最贴近标签点=target-1 (train_end+5)
 步骤: 特征平移 shift=1
-步骤: 加载价格数据 path=/Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk.parquet
+步骤: 加载价格数据 path=/Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk_with_industry.parquet
 步骤: 构建标签 label=5日收益
 步骤: 合并特征与标签 (Inner Join)
 数据集样本数=1355256
@@ -322,11 +340,19 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
 - `--timing-enter-threshold / --timing-exit-threshold`：双阈值迟滞，避免频繁开平仓。
 - `--timing-hysteresis`：未显式指定 enter 阈值时，enter=exit+hysteresis。
 - `--timing-bad-exposure`：择时关闭时的仓位缩放（例如 0.5 表示半仓；0 表示空仓）。
-- `--timing-method`：`index_ma20/index_ma_dual/score/none`（默认 `index_ma20`）。
-- `--risk-data-path / --risk-index-code`：风控数据路径与指数代码（默认 `399006`）。
-- `--risk-ma-window`：单均线窗口（`index_ma20`）。
+- `--timing-method`：择时方法（默认 `self_eq_ma20`）：
+  - `self_eq_ma20`：自算全样本等权指数 close-to-close，做 MA20 风控；信号使用前一交易日（shift(1)）。
+  - `index_ma20`：读取 `risk_data_path` 中指定指数（`--risk-index-code`，如 399006）close 与 MA20 比较；信号 shift(1)。
+  - `index_ma_dual`：读取指定指数 close 的快/慢均线交叉；信号 shift(1)。
+  - `split_index_ma20`：分板块双轨：300 前缀看 `--risk-index-code-300`，688 前缀看 `--risk-index-code-688`（均为 MA20，信号 shift(1)）。
+  - `score`：用 top 分数做阈值/滞回判断 risk_on。
+  - `none`：不择时，永远满仓（scale=1）。
+- `--risk-data-path`：外部指数数据 CSV 路径（供 `index_* / split_index_ma20` 使用）。
+- `--risk-index-code`：单指数方法的指数代码（默认 `self_eq`；当使用 `index_*` 时一般填 `399006`）。
+- `--risk-index-code-300 / --risk-index-code-688`：分板块双轨风控的指数代码（默认 `399006` / `000688`）。
+- `--risk-ma-window`：单均线窗口（`index_ma20/self_eq_ma20/split_index_ma20`）。
 - `--risk-ma-fast-window / --risk-ma-slow-window`：双均线窗口（`index_ma_dual`）。
-- `--risk-ma-buffer`：均线择时缓冲带，减少来回切换（对 `index_ma20/index_ma_dual` 生效）。
+- `--risk-ma-buffer`：均线择时缓冲带，减少来回切换（对 `index_ma20/index_ma_dual/self_eq_ma20/split_index_ma20` 生效）。
 
 ### 过拟合自检（可选）
 
@@ -346,6 +372,11 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
 - `--quick-eval-fee-rate`：单边手续费率（按调仓换手估算双边成本，默认 0.0003）。
 - `--quick-eval-slippage`：单边滑点率（正值=成本，负值=被动成交收益，默认 0.0）。
 - `--quick-eval-capital`：评估本金（用于输出期末资金/手续费金额，默认 10000000）。
+
+QuickEval 基准说明（Benchmark）：
+
+- 当 `--timing-method self_eq_ma20` 或 `--risk-index-code self_eq` 时，QuickEval 的基准日收益采用 price_data 的“全样本等权 close-to-close 平均涨跌幅”。
+- 否则，QuickEval 的基准日收益采用 `risk_data_path` 中 `risk_index_code` 对应指数的 close 涨跌幅。
 
 快速评估输出示例（默认）：
 

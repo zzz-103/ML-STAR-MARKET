@@ -16,6 +16,7 @@ from ml_models.model_functions._04_feature_engineering import (
     apply_feature_filters,
     build_constraints_dict,
     build_drop_factors,
+    build_keep_factors,
     build_monotone_constraints,
 )
 from ml_models.model_functions._05_weights import build_sample_weights
@@ -100,7 +101,11 @@ def run_overfit_check_on_panel(args, df_ml: pd.DataFrame, logger: logging.Logger
             use_default_drop_factors=bool(getattr(args, "use_default_drop_factors", True)),
             drop_factors_csv=getattr(args, "drop_factors", None),
         )
-        final_features = apply_feature_filters(features, drop_factors)
+        keep_factors = build_keep_factors(
+            use_default_keep_factors=bool(getattr(args, "use_default_keep_factors", True)),
+            keep_factors_csv=getattr(args, "keep_factors", None),
+        )
+        final_features = apply_feature_filters(features, drop_factors, keep_factors)
         if len(final_features) == 0:
             raise ValueError("可用特征为空")
 
