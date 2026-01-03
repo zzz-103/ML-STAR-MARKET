@@ -62,7 +62,7 @@ DEFAULT_MODEL = {
     "knn_neighbors": 50,
     "blend_xgb_weight": 0.7,
     "blend_knn_weight": 0.3,
-    "use_constraints": False,
+    "use_constraints": True,
 }
 
 DEFAULT_PORTFOLIO = {
@@ -198,16 +198,18 @@ DEFAULT_KEEP_FACTORS = [
 ]
 
 DEFAULT_MONOTONE_CONSTRAINTS = {
-    "BP": 0,
-    "SP_ttm": 0,
-    "pv_corr": 0,
+    "BP": 1,
+    "SP_ttm": 1,
+    "pv_corr": -1,
+    "roc_20": -1,
     "roc_5": 0,
     "roc_10": 0,
+    "vol_20": -1,
     "vol_5": 0,
     "vol_10": 0,
     "bias_5": 0,
     "bias_10": 0,
     "rsi_6": 0,
     "f_candle_strength": 0,
-    "f_amihud_liquidity_20": 0,
+    "f_amihud_liquidity_20": 1,
 }

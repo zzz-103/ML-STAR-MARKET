@@ -1,96 +1,106 @@
 Factor Quality Summary
 Date Range: 20230101 ~ 20241231
 Target: ret_fwd_5d = close(T+5)/close(T)-1 (per stock), factors shifted by 1 day
-Factors Source: /Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_20200101_20241231.parquet
+Factors Source: /Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_with_fundamentals.parquet
 Price Source: /Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk_with_industry.parquet
-Computed At: 2026-01-03 20:53:03
+Computed At: 2026-01-03 23:49:19
 
-Total Factors Evaluated: 10
+Total Factors Evaluated: 12
 
 Top Factors (sorted by |IC_mean|, then IR)
-               factor  n_dates   ic_mean   ic_std        ir    t_stat  ic_pos_rate  missing_rate
-               vol_20      478 -0.066272 0.175758 -0.377062 -8.243782     0.338912      0.007899
-               roc_20      478 -0.056997 0.155112 -0.367456 -8.033779     0.343096      0.005588
-f_amihud_liquidity_20      478  0.052174 0.182211  0.286341  6.260337     0.654812      0.007899
-              pv_corr      478 -0.046782 0.116804 -0.400515 -8.756552     0.320084      0.003290
-    f_candle_strength      478 -0.020629 0.130430 -0.158163 -3.457952     0.453975      0.002139
-  f_price_vol_corr_10      478  0.017902 0.102290  0.175014  3.826358     0.575314      0.003290
-        f_shadow_skew      478 -0.006824 0.120353 -0.056699 -1.239631     0.504184      0.002139
-  f_intraday_reversal      478 -0.006066 0.071278 -0.085103 -1.860619     0.479079      0.002318
-        f_trend_r2_20      478  0.005193 0.116429  0.044605  0.975199     0.502092      0.007628
-          f_vwap_bias      478 -0.000495 0.131981 -0.003753 -0.082047     0.516736      0.002318
+               factor whitelist  n_dates   ic_mean   ic_std        ir    t_stat  ic_pos_rate  missing_rate
+               vol_20         ✓      478 -0.066272 0.175758 -0.377062 -8.243782     0.338912      0.007899
+                   BP         ✓      478  0.060990 0.129064  0.472560 10.331678     0.707113      0.002789
+               roc_20         ✓      478 -0.056997 0.155112 -0.367456 -8.033779     0.343096      0.005588
+f_amihud_liquidity_20         ✓      478  0.052174 0.182211  0.286341  6.260337     0.654812      0.007899
+              pv_corr         ✓      478 -0.046782 0.116804 -0.400515 -8.756552     0.320084      0.003290
+               SP_ttm         ✓      478  0.044847 0.121871  0.367988  8.045392     0.648536      0.002789
+    f_candle_strength         ✓      478 -0.020629 0.130430 -0.158163 -3.457952     0.453975      0.002139
+  f_price_vol_corr_10                478  0.017902 0.102290  0.175014  3.826358     0.575314      0.003290
+        f_shadow_skew                478 -0.006824 0.120353 -0.056699 -1.239631     0.504184      0.002139
+  f_intraday_reversal                478 -0.006066 0.071278 -0.085103 -1.860619     0.479079      0.002318
+        f_trend_r2_20                478  0.005193 0.116429  0.044605  0.975199     0.502092      0.007628
+          f_vwap_bias                478 -0.000495 0.131981 -0.003753 -0.082047     0.516736      0.002318
 
 IC Distribution Quantiles (per factor)
-               factor    ic_p05    ic_p25    ic_p50   ic_p75   ic_p95
-               vol_20 -0.331285 -0.184535 -0.082457 0.044145 0.228429
-               roc_20 -0.279414 -0.142497 -0.056738 0.032675 0.172019
-f_amihud_liquidity_20 -0.291485 -0.049877  0.086863 0.178068 0.302099
-              pv_corr -0.211014 -0.118853 -0.050667 0.027073 0.145491
-    f_candle_strength -0.234417 -0.091195 -0.021146 0.063293 0.170218
-  f_price_vol_corr_10 -0.150063 -0.042461  0.019097 0.080871 0.168762
-        f_shadow_skew -0.199395 -0.075232  0.000482 0.071021 0.171472
-  f_intraday_reversal -0.112350 -0.044483 -0.003165 0.035075 0.102899
-        f_trend_r2_20 -0.165642 -0.070596  0.000894 0.078746 0.182044
-          f_vwap_bias -0.197387 -0.087174  0.008801 0.080440 0.203469
+               factor whitelist    ic_p05    ic_p25    ic_p50   ic_p75   ic_p95
+               vol_20         ✓ -0.331285 -0.184535 -0.082457 0.044145 0.228429
+                   BP         ✓ -0.167765 -0.023801  0.064513 0.153157 0.257826
+               roc_20         ✓ -0.279414 -0.142497 -0.056738 0.032675 0.172019
+f_amihud_liquidity_20         ✓ -0.291485 -0.049877  0.086863 0.178068 0.302099
+              pv_corr         ✓ -0.211014 -0.118853 -0.050667 0.027073 0.145491
+               SP_ttm         ✓ -0.168644 -0.035223  0.047160 0.136178 0.243818
+    f_candle_strength         ✓ -0.234417 -0.091195 -0.021146 0.063293 0.170218
+  f_price_vol_corr_10           -0.150063 -0.042461  0.019097 0.080871 0.168762
+        f_shadow_skew           -0.199395 -0.075232  0.000482 0.071021 0.171472
+  f_intraday_reversal           -0.112350 -0.044483 -0.003165 0.035075 0.102899
+        f_trend_r2_20           -0.165642 -0.070596  0.000894 0.078746 0.182044
+          f_vwap_bias           -0.197387 -0.087174  0.008801 0.080440 0.203469
 
 All Factors
-               factor  n_dates   ic_mean   ic_std        ir    t_stat  ic_pos_rate    ic_p05    ic_p50   ic_p95  missing_rate
-               vol_20      478 -0.066272 0.175758 -0.377062 -8.243782     0.338912 -0.331285 -0.082457 0.228429      0.007899
-               roc_20      478 -0.056997 0.155112 -0.367456 -8.033779     0.343096 -0.279414 -0.056738 0.172019      0.005588
-f_amihud_liquidity_20      478  0.052174 0.182211  0.286341  6.260337     0.654812 -0.291485  0.086863 0.302099      0.007899
-              pv_corr      478 -0.046782 0.116804 -0.400515 -8.756552     0.320084 -0.211014 -0.050667 0.145491      0.003290
-    f_candle_strength      478 -0.020629 0.130430 -0.158163 -3.457952     0.453975 -0.234417 -0.021146 0.170218      0.002139
-  f_price_vol_corr_10      478  0.017902 0.102290  0.175014  3.826358     0.575314 -0.150063  0.019097 0.168762      0.003290
-        f_shadow_skew      478 -0.006824 0.120353 -0.056699 -1.239631     0.504184 -0.199395  0.000482 0.171472      0.002139
-  f_intraday_reversal      478 -0.006066 0.071278 -0.085103 -1.860619     0.479079 -0.112350 -0.003165 0.102899      0.002318
-        f_trend_r2_20      478  0.005193 0.116429  0.044605  0.975199     0.502092 -0.165642  0.000894 0.182044      0.007628
-          f_vwap_bias      478 -0.000495 0.131981 -0.003753 -0.082047     0.516736 -0.197387  0.008801 0.203469      0.002318
+               factor whitelist  n_dates   ic_mean   ic_std        ir    t_stat  ic_pos_rate    ic_p05    ic_p50   ic_p95  missing_rate
+               vol_20         ✓      478 -0.066272 0.175758 -0.377062 -8.243782     0.338912 -0.331285 -0.082457 0.228429      0.007899
+                   BP         ✓      478  0.060990 0.129064  0.472560 10.331678     0.707113 -0.167765  0.064513 0.257826      0.002789
+               roc_20         ✓      478 -0.056997 0.155112 -0.367456 -8.033779     0.343096 -0.279414 -0.056738 0.172019      0.005588
+f_amihud_liquidity_20         ✓      478  0.052174 0.182211  0.286341  6.260337     0.654812 -0.291485  0.086863 0.302099      0.007899
+              pv_corr         ✓      478 -0.046782 0.116804 -0.400515 -8.756552     0.320084 -0.211014 -0.050667 0.145491      0.003290
+               SP_ttm         ✓      478  0.044847 0.121871  0.367988  8.045392     0.648536 -0.168644  0.047160 0.243818      0.002789
+    f_candle_strength         ✓      478 -0.020629 0.130430 -0.158163 -3.457952     0.453975 -0.234417 -0.021146 0.170218      0.002139
+  f_price_vol_corr_10                478  0.017902 0.102290  0.175014  3.826358     0.575314 -0.150063  0.019097 0.168762      0.003290
+        f_shadow_skew                478 -0.006824 0.120353 -0.056699 -1.239631     0.504184 -0.199395  0.000482 0.171472      0.002139
+  f_intraday_reversal                478 -0.006066 0.071278 -0.085103 -1.860619     0.479079 -0.112350 -0.003165 0.102899      0.002318
+        f_trend_r2_20                478  0.005193 0.116429  0.044605  0.975199     0.502092 -0.165642  0.000894 0.182044      0.007628
+          f_vwap_bias                478 -0.000495 0.131981 -0.003753 -0.082047     0.516736 -0.197387  0.008801 0.203469      0.002318
 
 
 Factor Quality Summary (2023 Only, Top 20)
 Date Range: 20230101 ~ 20231231
 Target: ret_fwd_5d = close(T+5)/close(T)-1 (per stock), factors shifted by 1 day
-Factors Source: /Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_20200101_20241231.parquet
+Factors Source: /Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_with_fundamentals.parquet
 Price Source: /Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk_with_industry.parquet
-Computed At: 2026-01-03 20:53:04
+Computed At: 2026-01-03 23:49:20
 
-Total Factors Evaluated: 10
+Total Factors Evaluated: 12
 
 Top Factors (sorted by |IC_mean|, then IR)
-               factor  n_dates   ic_mean   ic_std        ir    t_stat  ic_pos_rate  missing_rate
-               vol_20      241 -0.087162 0.159511 -0.546433 -8.482915     0.315353      0.011432
-f_amihud_liquidity_20      241  0.080268 0.151845  0.528616  8.206333     0.692946      0.011432
-               roc_20      241 -0.047343 0.128218 -0.369243 -5.732193     0.360996      0.009430
-              pv_corr      241 -0.032001 0.098337 -0.325425 -5.051958     0.344398      0.006102
-    f_candle_strength      241 -0.018081 0.113171 -0.159764 -2.480199     0.456432      0.004233
-        f_trend_r2_20      241  0.015724 0.093828  0.167578  2.601514     0.543568      0.011079
-          f_vwap_bias      241  0.005364 0.122051  0.043950  0.682293     0.564315      0.004400
-  f_intraday_reversal      241 -0.003092 0.055476 -0.055734 -0.865227     0.481328      0.004400
-  f_price_vol_corr_10      241  0.002273 0.090748  0.025043  0.388765     0.526971      0.006102
-        f_shadow_skew      241 -0.001173 0.109002 -0.010765 -0.167121     0.522822      0.004233
+               factor whitelist  n_dates   ic_mean   ic_std        ir    t_stat  ic_pos_rate  missing_rate
+               vol_20         ✓      241 -0.087162 0.159511 -0.546433 -8.482915     0.315353      0.011432
+f_amihud_liquidity_20         ✓      241  0.080268 0.151845  0.528616  8.206333     0.692946      0.011432
+                   BP         ✓      241  0.079333 0.118184  0.671264 10.420815     0.755187      0.004874
+               SP_ttm         ✓      241  0.047658 0.116930  0.407581  6.327355     0.668050      0.004874
+               roc_20         ✓      241 -0.047343 0.128218 -0.369243 -5.732193     0.360996      0.009430
+              pv_corr         ✓      241 -0.032001 0.098337 -0.325425 -5.051958     0.344398      0.006102
+    f_candle_strength         ✓      241 -0.018081 0.113171 -0.159764 -2.480199     0.456432      0.004233
+        f_trend_r2_20                241  0.015724 0.093828  0.167578  2.601514     0.543568      0.011079
+          f_vwap_bias                241  0.005364 0.122051  0.043950  0.682293     0.564315      0.004400
+  f_intraday_reversal                241 -0.003092 0.055476 -0.055734 -0.865227     0.481328      0.004400
+  f_price_vol_corr_10                241  0.002273 0.090748  0.025043  0.388765     0.526971      0.006102
+        f_shadow_skew                241 -0.001173 0.109002 -0.010765 -0.167121     0.522822      0.004233
 
 
 Factor Quality Summary (2024 Only, Top 20)
 Date Range: 20240101 ~ 20241231
 Target: ret_fwd_5d = close(T+5)/close(T)-1 (per stock), factors shifted by 1 day
-Factors Source: /Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_20200101_20241231.parquet
+Factors Source: /Users/zhuzhuxia/Documents/SZU_w4/factors_data/all_factors_with_fundamentals.parquet
 Price Source: /Users/zhuzhuxia/Documents/SZU_w4/pre_data/cleaned_stock_data_300_688_with_idxstk_with_industry.parquet
-Computed At: 2026-01-03 20:53:05
+Computed At: 2026-01-03 23:49:21
 
-Total Factors Evaluated: 10
+Total Factors Evaluated: 12
 
 Top Factors (sorted by |IC_mean|, then IR)
-               factor  n_dates   ic_mean   ic_std        ir    t_stat  ic_pos_rate  missing_rate
-               roc_20      237 -0.066814 0.178099 -0.375149 -5.775351     0.324895      0.001745
-              pv_corr      237 -0.061812 0.131496 -0.470063 -7.236524     0.295359      0.000478
-               vol_20      237 -0.045029 0.188846 -0.238444 -3.670794     0.362869      0.004365
-  f_price_vol_corr_10      237  0.033795 0.110771  0.305094  4.696855     0.624473      0.000478
-f_amihud_liquidity_20      237  0.023607 0.205016  0.115146  1.772656     0.616034      0.004365
-    f_candle_strength      237 -0.023221 0.146103 -0.158934 -2.446754     0.451477      0.000044
-        f_shadow_skew      237 -0.012570 0.130875 -0.096045 -1.478591     0.485232      0.000044
-  f_intraday_reversal      237 -0.009090 0.084385 -0.107723 -1.658379     0.476793      0.000236
-          f_vwap_bias      237 -0.006454 0.141377 -0.045648 -0.702749     0.468354      0.000236
-        f_trend_r2_20      237 -0.005515 0.134971 -0.040859 -0.629021     0.459916      0.004176
+               factor whitelist  n_dates   ic_mean   ic_std        ir    t_stat  ic_pos_rate  missing_rate
+               roc_20         ✓      237 -0.066814 0.178099 -0.375149 -5.775351     0.324895      0.001745
+              pv_corr         ✓      237 -0.061812 0.131496 -0.470063 -7.236524     0.295359      0.000478
+               vol_20         ✓      237 -0.045029 0.188846 -0.238444 -3.670794     0.362869      0.004365
+                   BP         ✓      237  0.042339 0.137007  0.309027  4.757411     0.658228      0.000703
+               SP_ttm         ✓      237  0.041988 0.126883  0.330923  5.094492     0.628692      0.000703
+  f_price_vol_corr_10                237  0.033795 0.110771  0.305094  4.696855     0.624473      0.000478
+f_amihud_liquidity_20         ✓      237  0.023607 0.205016  0.115146  1.772656     0.616034      0.004365
+    f_candle_strength         ✓      237 -0.023221 0.146103 -0.158934 -2.446754     0.451477      0.000044
+        f_shadow_skew                237 -0.012570 0.130875 -0.096045 -1.478591     0.485232      0.000044
+  f_intraday_reversal                237 -0.009090 0.084385 -0.107723 -1.658379     0.476793      0.000236
+          f_vwap_bias                237 -0.006454 0.141377 -0.045648 -0.702749     0.468354      0.000236
+        f_trend_r2_20                237 -0.005515 0.134971 -0.040859 -0.629021     0.459916      0.004176
 
 
 Factor Correlation (|corr| Top 30)
@@ -99,8 +109,11 @@ Factor Correlation (|corr| Top 30)
         f_shadow_skew         f_vwap_bias  0.705374     718288
   f_price_vol_corr_10             pv_corr -0.672397     717588
     f_candle_strength         f_vwap_bias  0.525397     718288
+                   BP              SP_ttm  0.462025     717949
               pv_corr              roc_20  0.279745     715934
                roc_20              vol_20  0.277260     714270
+f_amihud_liquidity_20                  BP  0.235901     713823
+               vol_20                  BP -0.229287     713823
         f_trend_r2_20             pv_corr -0.189776     714465
               pv_corr              vol_20  0.186952     714270
     f_candle_strength              roc_20  0.158575     715934
@@ -110,18 +123,15 @@ Factor Correlation (|corr| Top 30)
         f_shadow_skew              roc_20  0.126130     715934
 f_amihud_liquidity_20             pv_corr -0.125229     714270
   f_price_vol_corr_10       f_trend_r2_20  0.120468     714465
+               vol_20              SP_ttm -0.118890     713823
 f_amihud_liquidity_20              vol_20 -0.114212     714270
+               roc_20                  BP -0.099915     715477
 f_amihud_liquidity_20 f_price_vol_corr_10  0.086134     714270
     f_candle_strength             pv_corr  0.071755     717588
 f_amihud_liquidity_20              roc_20 -0.063309     714270
+              pv_corr                  BP -0.062008     717121
         f_trend_r2_20              roc_20 -0.048030     714270
+               roc_20              SP_ttm -0.046704     715477
           f_vwap_bias             pv_corr  0.045189     717493
         f_trend_r2_20              vol_20 -0.042443     714270
     f_candle_strength f_price_vol_corr_10 -0.036728     717588
-f_amihud_liquidity_20       f_shadow_skew  0.028150     714270
-        f_shadow_skew             pv_corr  0.025891     717588
-    f_candle_strength              vol_20  0.025702     714270
-  f_intraday_reversal              vol_20 -0.024956     714264
-  f_intraday_reversal              roc_20  0.019890     715928
-f_amihud_liquidity_20         f_vwap_bias  0.018709     714264
-  f_intraday_reversal         f_vwap_bias -0.015291     718288

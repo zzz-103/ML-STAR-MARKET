@@ -12,3 +12,11 @@
 
 强制重跑并覆盖已有输出：
 - python generate_factors/main.py --models ma_factors --force
+
+"""
+python ".../generate_factors/main.py" 
+--summary-only \
+  --summary-start-date 20230101 
+  --summary-end-date 20241231
+  
+"""

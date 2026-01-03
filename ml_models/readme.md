@@ -272,7 +272,7 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
   --diagnose \
   --diag-start-date 20230101 \
   --diag-end-date 20241231 \
-  --diag-step 5 \
+  --diag-step 1 \
   --diag-top-k 30 \
   --diag-min-n 300
 ```

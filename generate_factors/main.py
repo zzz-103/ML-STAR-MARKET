@@ -37,20 +37,27 @@ FUND_OUTPUT_PATH = str(PROJECT_ROOT / "factors_data" / "all_factors_with_fundame
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 SUMMARY_PATH = str(Path(__file__).resolve().parent / "factors_summary.txt")
 QUALITY_START = "20230101"
 QUALITY_END = "20241231"
 MASKED_FACTORS = {"ff_mkt", "ff_hml", "ff_smb", "ff_smb_cov_60"}
-KEEP_FACTORS = {
-    "BP",
-    "SP_ttm",
-    "pv_corr",
-    "roc_20",
-    "vol_20",
-    "f_candle_strength",
-    "f_amihud_liquidity_20",
-}
+
+def _load_keep_factors_from_ml_models() -> set[str]:
+    try:
+        from ml_models import xgb_config as ml_cfg
+
+        keep = getattr(ml_cfg, "DEFAULT_KEEP_FACTORS", None)
+        if keep is None:
+            return set()
+        return set(str(x) for x in keep)
+    except Exception:
+        return set()
+
+
+KEEP_FACTORS = _load_keep_factors_from_ml_models()
 FOCUS_STOCK_POOL_PREFIXES = ("300", "688")
 QUALITY_HORIZON_DAYS = 5
 
@@ -155,6 +162,7 @@ def _prepare_quality_panel(
     start_yyyymmdd,
     end_yyyymmdd,
     drop_factors=None,
+    keep_factors=None,
     stock_pool_prefixes=None,
     horizon_days=QUALITY_HORIZON_DAYS,
 ):
@@ -204,23 +212,27 @@ def _prepare_quality_panel(
     if drop_factors:
         drop_set = set(str(x) for x in drop_factors)
         factor_cols = [c for c in factor_cols if str(c) not in drop_set]
+    if keep_factors:
+        keep_set = set(str(x) for x in keep_factors)
+        factor_cols = [c for c in factor_cols if str(c) in keep_set]
     numeric_cols = df[factor_cols].select_dtypes(include=[np.number]).columns.tolist()
     factor_cols = [c for c in factor_cols if c in set(numeric_cols)]
     return df, factor_cols
 
 
-def _compute_factor_quality(df, factor_cols, target_col):
+def _compute_factor_quality(df, factor_cols, target_col, *, min_n: int = 30):
     results = []
     target_col = str(target_col)
     if target_col not in df.columns:
         raise ValueError(f"目标列不存在: {target_col}")
+    min_n = int(min_n)
     for col in factor_cols:
         sub = df[[col, target_col]].dropna()
         if len(sub) == 0:
             continue
         ic_by_date = (
             sub.groupby(level="date", sort=True)
-            .apply(_safe_spearman_ic, factor_col=col, target_col=target_col)
+            .apply(_safe_spearman_ic, factor_col=col, target_col=target_col, min_n=min_n)
             .dropna()
         )
         if len(ic_by_date) == 0:
@@ -271,6 +283,9 @@ def _render_quality_lines(
     include_all_factors=True,
 ):
     top_n = min(int(top_n), len(df_res))
+    df_print = df_res.copy()
+    keep = KEEP_FACTORS if isinstance(KEEP_FACTORS, set) else set()
+    df_print["whitelist"] = df_print["factor"].astype(str).apply(lambda x: "✓" if x in keep else "")
     lines = []
     lines.append(title)
     lines.append(f"Date Range: {start_yyyymmdd} ~ {end_yyyymmdd}")
@@ -279,26 +294,30 @@ def _render_quality_lines(
     lines.append(f"Price Source: {price_parquet_path}")
     lines.append(f"Computed At: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
-    lines.append(f"Total Factors Evaluated: {len(df_res)}")
+    lines.append(f"Total Factors Evaluated: {len(df_print)}")
     lines.append("")
     lines.append("Top Factors (sorted by |IC_mean|, then IR)")
     lines.append(
-        df_res.head(top_n)[
-            ["factor", "n_dates", "ic_mean", "ic_std", "ir", "t_stat", "ic_pos_rate", "missing_rate"]
+        df_print.head(top_n)[
+            ["factor", "whitelist", "n_dates", "ic_mean", "ic_std", "ir", "t_stat", "ic_pos_rate", "missing_rate"]
         ].to_string(index=False)
     )
 
     if include_quantiles:
         lines.append("")
         lines.append("IC Distribution Quantiles (per factor)")
-        lines.append(df_res[["factor", "ic_p05", "ic_p25", "ic_p50", "ic_p75", "ic_p95"]].head(top_n).to_string(index=False))
+        lines.append(
+            df_print[["factor", "whitelist", "ic_p05", "ic_p25", "ic_p50", "ic_p75", "ic_p95"]]
+            .head(top_n)
+            .to_string(index=False)
+        )
 
     if include_all_factors:
         lines.append("")
         lines.append("All Factors")
         lines.append(
-            df_res[
-                ["factor", "n_dates", "ic_mean", "ic_std", "ir", "t_stat", "ic_pos_rate", "ic_p05", "ic_p50", "ic_p95", "missing_rate"]
+            df_print[
+                ["factor", "whitelist", "n_dates", "ic_mean", "ic_std", "ir", "t_stat", "ic_pos_rate", "ic_p05", "ic_p50", "ic_p95", "missing_rate"]
             ].to_string(index=False)
         )
 
@@ -312,8 +331,10 @@ def analyze_factor_quality(
     end_yyyymmdd,
     out_path,
     drop_factors=None,
+    keep_factors=None,
     stock_pool_prefixes=None,
     horizon_days=QUALITY_HORIZON_DAYS,
+    min_n: int = 30,
 ):
     df, factor_cols = _prepare_quality_panel(
         factors_parquet_path=factors_parquet_path,
@@ -321,12 +342,13 @@ def analyze_factor_quality(
         start_yyyymmdd=start_yyyymmdd,
         end_yyyymmdd=end_yyyymmdd,
         drop_factors=drop_factors,
+        keep_factors=keep_factors,
         stock_pool_prefixes=stock_pool_prefixes,
         horizon_days=horizon_days,
     )
     horizon_days = int(horizon_days)
     target_col = f"ret_fwd_{horizon_days}d"
-    df_res = _compute_factor_quality(df, factor_cols, target_col=target_col)
+    df_res = _compute_factor_quality(df, factor_cols, target_col=target_col, min_n=int(min_n))
 
     lines = _render_quality_lines(
         df_res=df_res,
@@ -520,6 +542,16 @@ def parse_args():
     parser.add_argument("--diag-start-date", default=QUALITY_START)
     parser.add_argument("--diag-end-date", default=QUALITY_END)
     parser.add_argument("--diag-horizon-days", type=int, default=QUALITY_HORIZON_DAYS)
+    parser.add_argument("--summary-only", action="store_true", default=False)
+    parser.add_argument("--summary-start-date", default=QUALITY_START)
+    parser.add_argument("--summary-end-date", default=QUALITY_END)
+    parser.add_argument("--summary-horizon-days", type=int, default=QUALITY_HORIZON_DAYS)
+    parser.add_argument("--summary-min-n", type=int, default=30)
+    parser.add_argument("--summary-corr-top-k", type=int, default=30)
+    parser.add_argument("--summary-out", default=SUMMARY_PATH)
+    parser.add_argument("--summary-factors-parquet", default=None)
+    parser.add_argument("--summary-price-parquet", default=CLEANED_DATA_PATH)
+    parser.add_argument("--summary-keep-factors", default=None, help="Comma-separated factor names for quality report")
     parser.add_argument("--merge-fundamentals", action="store_true", default=False)
     parser.add_argument("--fund-price-path", default=FUND_PRICE_PATH)
     parser.add_argument("--fund-factor-path", default=FUND_FACTOR_PATH)
@@ -533,6 +565,19 @@ def parse_date_range_from_path(path):
     if not m:
         return None
     return m.group(1), m.group(2)
+
+
+def _find_latest_factors_parquet(output_root: str) -> str | None:
+    try:
+        candidates = glob.glob(os.path.join(str(output_root), "all_factors_*.parquet"))
+        candidates = [p for p in candidates if os.path.isfile(p)]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return candidates[0]
+    except Exception:
+        return None
+
 
 
 def build_all_factors_parquet(output_root, start_date, end_date):
@@ -637,8 +682,10 @@ def write_quality_report(
     yearly_ranges=None,
     corr_top_k=30,
     drop_factors=None,
+    keep_factors=None,
     stock_pool_prefixes=None,
     horizon_days=QUALITY_HORIZON_DAYS,
+    min_n: int = 30,
 ):
     df, factor_cols = _prepare_quality_panel(
         factors_parquet_path=factors_parquet_path,
@@ -646,12 +693,13 @@ def write_quality_report(
         start_yyyymmdd=quality_start,
         end_yyyymmdd=quality_end,
         drop_factors=drop_factors,
+        keep_factors=keep_factors,
         stock_pool_prefixes=stock_pool_prefixes,
         horizon_days=horizon_days,
     )
     horizon_days = int(horizon_days)
     target_col = f"ret_fwd_{horizon_days}d"
-    df_res_full = _compute_factor_quality(df, factor_cols, target_col=target_col)
+    df_res_full = _compute_factor_quality(df, factor_cols, target_col=target_col, min_n=int(min_n))
     lines = _render_quality_lines(
         df_res=df_res_full,
         factors_parquet_path=factors_parquet_path,
@@ -670,7 +718,7 @@ def write_quality_report(
         sub = df.loc[pd.IndexSlice[_parse_yyyymmdd(s) : _parse_yyyymmdd(e), :], :]
         if len(sub) == 0:
             continue
-        df_res_year = _compute_factor_quality(sub, factor_cols, target_col=target_col)
+        df_res_year = _compute_factor_quality(sub, factor_cols, target_col=target_col, min_n=int(min_n))
         lines.append("")
         lines.append("")
         lines.extend(
@@ -750,6 +798,47 @@ def main():
         print(f"\n[{datetime.now().time()}] ✅ 已保存逐因子 IC/IR 诊断报告: {out_path}")
         return
 
+    if bool(getattr(args, "summary_only", False)):
+        start = str(getattr(args, "summary_start_date", QUALITY_START))
+        end = str(getattr(args, "summary_end_date", QUALITY_END))
+        horizon_days = int(getattr(args, "summary_horizon_days", QUALITY_HORIZON_DAYS))
+        min_n = int(getattr(args, "summary_min_n", 30))
+        corr_top_k = int(getattr(args, "summary_corr_top_k", 30))
+        out_path = str(getattr(args, "summary_out", SUMMARY_PATH))
+        price_parquet = str(getattr(args, "summary_price_parquet", CLEANED_DATA_PATH))
+        keep_factors = parse_list(getattr(args, "summary_keep_factors", None))
+        keep_factors = keep_factors if keep_factors else None
+
+        factors_parquet = getattr(args, "summary_factors_parquet", None)
+        if factors_parquet:
+            factors_parquet = str(factors_parquet)
+        elif os.path.exists(FUND_OUTPUT_PATH):
+            factors_parquet = str(FUND_OUTPUT_PATH)
+        else:
+            factors_parquet = _find_latest_factors_parquet(OUTPUT_ROOT)
+        if not factors_parquet:
+            raise FileNotFoundError("找不到可用于 summary 的 factors parquet")
+
+        out_path = write_quality_report(
+            factors_parquet_path=factors_parquet,
+            price_parquet_path=price_parquet,
+            quality_start=start,
+            quality_end=end,
+            out_path=out_path,
+            yearly_ranges=[
+                ("Factor Quality Summary (2023 Only, Top 20)", "20230101", "20231231"),
+                ("Factor Quality Summary (2024 Only, Top 20)", "20240101", "20241231"),
+            ],
+            corr_top_k=corr_top_k,
+            drop_factors=MASKED_FACTORS,
+            keep_factors=keep_factors,
+            stock_pool_prefixes=FOCUS_STOCK_POOL_PREFIXES,
+            horizon_days=horizon_days,
+            min_n=min_n,
+        )
+        print(f"\n[{datetime.now().time()}] ✅ 已生成因子质量概要: {out_path}")
+        return
+
     selected_models = parse_list(args.models)
     selected_factors = parse_list(args.factors)
 
@@ -809,7 +898,7 @@ def main():
     total_skipped = 0
     total_failed = 0
 
-    for loader, module_name, is_pkg in pkgutil.iter_modules(models.__path__):
+    for _, module_name, _ in pkgutil.iter_modules(models.__path__):
         try:
             if module_name not in models_to_run_set:
                 continue
