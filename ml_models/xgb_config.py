@@ -193,10 +193,8 @@ DEFAULT_KEEP_FACTORS = [
     "pv_corr",
     "roc_20",
     "vol_20",
-    "f_vwap_bias",
     "f_candle_strength",
-    "f_price_vol_corr_10",
-    "f_intraday_reversal",
+    "f_amihud_liquidity_20",
 ]
 
 DEFAULT_MONOTONE_CONSTRAINTS = {
@@ -210,8 +208,6 @@ DEFAULT_MONOTONE_CONSTRAINTS = {
     "bias_5": 0,
     "bias_10": 0,
     "rsi_6": 0,
-    "f_price_vol_corr_10": 0,
-    "f_vwap_bias": 0,
-    "f_intraday_reversal": 0,
     "f_candle_strength": 0,
+    "f_amihud_liquidity_20": 0,
 }

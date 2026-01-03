@@ -43,13 +43,13 @@ QUALITY_START = "20230101"
 QUALITY_END = "20241231"
 MASKED_FACTORS = {"ff_mkt", "ff_hml", "ff_smb", "ff_smb_cov_60"}
 KEEP_FACTORS = {
+    "BP",
+    "SP_ttm",
     "pv_corr",
     "roc_20",
     "vol_20",
-    "f_price_vol_corr_10",
-    "f_vwap_bias",
-    "f_intraday_reversal",
     "f_candle_strength",
+    "f_amihud_liquidity_20",
 }
 FOCUS_STOCK_POOL_PREFIXES = ("300", "688")
 QUALITY_HORIZON_DAYS = 5
@@ -873,6 +873,14 @@ def main():
         else:
             parquet_path, included = res
             print(f"\n[{datetime.now().time()}] ✅ 已生成总 Parquet: {parquet_path} (factors={included})")
+            try:
+                if os.path.exists(FUND_PRICE_PATH):
+                    print(f"\n[{datetime.now().time()}] 开始合并基本面到: {FUND_OUTPUT_PATH}")
+                    merge_fundamentals(price_path=FUND_PRICE_PATH, factor_path=parquet_path, output_path=FUND_OUTPUT_PATH)
+                else:
+                    print(f"\n[{datetime.now().time()}] ⚠️ 找不到 FUND_PRICE_PATH，跳过基本面合并: {FUND_PRICE_PATH}")
+            except Exception as e:
+                print(f"\n[{datetime.now().time()}] ⚠️ 基本面合并失败（不影响因子生成/质量分析）: {e}")
     except Exception as e:
         print(f"\n[{datetime.now().time()}] ❌ 生成总 Parquet 失败: {e}")
         import traceback

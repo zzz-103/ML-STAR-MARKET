@@ -2,6 +2,44 @@ import numpy as np
 import pandas as pd
 
 
+def _rolling_trend_r2(series: pd.Series, window: int) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    y = s.to_numpy(dtype="float64", copy=True)
+    n = int(y.shape[0])
+    out = np.full(n, np.nan, dtype="float64")
+    w = int(window)
+    if w <= 1 or n < w:
+        return pd.Series(out, index=series.index)
+
+    finite = np.isfinite(y)
+    y0 = np.where(finite, y, 0.0)
+    ones = np.ones(w, dtype="float64")
+
+    sum_y = np.convolve(y0, ones, mode="valid")
+    sum_y2 = np.convolve(y0 * y0, ones, mode="valid")
+
+    x = np.arange(w, dtype="float64")
+    sum_x = float(x.sum())
+    sum_x2 = float((x * x).sum())
+    var_x = float(sum_x2 - (sum_x * sum_x) / float(w))
+    sum_xy = np.convolve(y0, x[::-1], mode="valid")
+
+    count = np.convolve(finite.astype("float64"), ones, mode="valid")
+    valid = count == float(w)
+
+    cov_xy = sum_xy - (sum_x * sum_y) / float(w)
+    var_y = sum_y2 - (sum_y * sum_y) / float(w)
+    denom = var_x * var_y
+
+    r2 = np.full_like(sum_y, np.nan, dtype="float64")
+    good = valid & np.isfinite(denom) & (denom > 0.0)
+    r2[good] = (cov_xy[good] * cov_xy[good]) / denom[good]
+    r2 = np.clip(r2, 0.0, 1.0, out=r2, where=np.isfinite(r2))
+
+    out[w - 1 :] = r2
+    return pd.Series(out, index=series.index)
+
+
 def run(df: pd.DataFrame) -> pd.DataFrame:
     output = pd.DataFrame(index=df.index)
 
@@ -95,5 +133,22 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
 
     denom_hl = (high - low) + 1e-6
     output["f_candle_strength"] = (close - open_p) / denom_hl
+
+    trend_r2_20 = (
+        close_safe.groupby(level="code", sort=False)
+        .apply(lambda x: _rolling_trend_r2(x, 20))
+        .reset_index(level=0, drop=True)
+    )
+    output["f_trend_r2_20"] = trend_r2_20
+
+    amihud_daily = ret_1.abs() / (turnover + 1e-6)
+    output["f_amihud_liquidity_20"] = (
+        amihud_daily.groupby(level="code")
+        .rolling(20, min_periods=20)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+
+    output["f_shadow_skew"] = ((close - low) - (high - close)) / denom_hl
 
     return output

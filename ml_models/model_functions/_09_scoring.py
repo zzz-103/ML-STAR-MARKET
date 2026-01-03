@@ -165,8 +165,7 @@ def process_single_day_score(
         except Exception:
             pass
 
-        keep_n = max(200, int(getattr(args, "top_k", 0)), int(getattr(args, "buffer_k", 0)), int(getattr(args, "emergency_exit_rank", 0)))
-        daily_result = daily_result.sort_values(by="score", ascending=False).head(keep_n)
+        daily_result = daily_result.sort_values(by="score", ascending=False)
         date_str = target_date.strftime("%Y%m%d")
         temp_file_path = os.path.join(temp_dir, f"{date_str}.parquet")
         daily_result.to_parquet(temp_file_path)

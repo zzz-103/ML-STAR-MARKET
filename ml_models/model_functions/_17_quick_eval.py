@@ -27,6 +27,7 @@ class QuickEvalPaths:
     fig_excess_hist_png: Path
     fig_heatmap_png: Path
     fig_relative_equity_png: Path
+    fig_dual_equity_png: Path
 
 
 def _ensure_dir(p: Path) -> None:
@@ -386,6 +387,75 @@ def _plot_relative_equity(dates: pd.DatetimeIndex, equity: pd.Series, bench_equi
     plt.close()
 
 
+def _compute_self_eq_ret(df_price: pd.DataFrame, start_s: str, end_s: str) -> pd.Series:
+    close = pd.to_numeric(df_price.get("close", np.nan), errors="coerce").astype(float)
+    close = close.where(close > 0)
+    ret = close.groupby(level="code").pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+    bench_ret = ret.groupby(level="date").mean().sort_index().fillna(0.0).astype("float64")
+    start_dt = pd.to_datetime(start_s, format="%Y%m%d", errors="coerce")
+    end_dt = pd.to_datetime(end_s, format="%Y%m%d", errors="coerce")
+    if not pd.isna(start_dt) and not pd.isna(end_dt):
+        bench_ret = bench_ret.loc[(bench_ret.index >= start_dt) & (bench_ret.index <= end_dt)]
+    return bench_ret
+
+
+def _plot_dual_equity_curve(
+    dates: pd.DatetimeIndex,
+    equity: pd.Series,
+    bench1_equity: pd.Series,
+    bench1_name: str,
+    bench2_equity: pd.Series,
+    bench2_name: str,
+    out_path: Path,
+    win_rates: dict[str, str] = {},
+) -> None:
+    plt.figure(figsize=(14, 10), dpi=120)
+    
+    # Subplot 1: Equity Curves
+    ax1 = plt.subplot(2, 1, 1)
+    x = dates
+    y = equity.to_numpy()
+    ax1.plot(x, y, label="Strategy", linewidth=2.0, color="#1f77b4", zorder=5)
+    
+    if len(bench1_equity) == len(equity):
+        ax1.plot(x, bench1_equity.to_numpy(), label=f"{bench1_name}", linewidth=1.5, color="#ff7f0e", linestyle="--", alpha=0.9)
+    if len(bench2_equity) == len(equity):
+        ax1.plot(x, bench2_equity.to_numpy(), label=f"{bench2_name}", linewidth=1.5, color="#2ca02c", linestyle="-.", alpha=0.9)
+        
+    ax1.axhline(1.0, color="gray", linestyle="--", linewidth=1, alpha=0.5)
+    ax1.set_title("Dual Benchmark Equity Comparison")
+    ax1.grid(True, linestyle="--", alpha=0.35)
+    ax1.legend(loc="upper left")
+    
+    # Add win rate text
+    if win_rates:
+        info_text = "\n".join([f"{k}: {v}" for k, v in win_rates.items()])
+        # Place text in bottom right of the plot area
+        ax1.text(0.98, 0.02, info_text, transform=ax1.transAxes, fontsize=10, 
+                 verticalalignment='bottom', horizontalalignment='right', 
+                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+
+    # Subplot 2: Relative Strength
+    ax2 = plt.subplot(2, 1, 2, sharex=ax1)
+    
+    if len(bench1_equity) == len(equity):
+        rel1 = equity / bench1_equity
+        ax2.plot(x, rel1.to_numpy(), label=f"Relative to {bench1_name}", linewidth=1.5, color="#ff7f0e")
+        
+    if len(bench2_equity) == len(equity):
+        rel2 = equity / bench2_equity
+        ax2.plot(x, rel2.to_numpy(), label=f"Relative to {bench2_name}", linewidth=1.5, color="#2ca02c")
+        
+    ax2.axhline(1.0, color="gray", linestyle="--", linewidth=1, alpha=0.5)
+    ax2.set_title("Relative Strength (Strategy / Benchmark)")
+    ax2.grid(True, linestyle="--", alpha=0.35)
+    ax2.legend(loc="upper left")
+    
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+
 def _encode_img_base64(path: Path) -> str:
     b = path.read_bytes()
     ext = path.suffix.lower().lstrip(".")
@@ -405,6 +475,7 @@ def _build_paths(save_dir: str, dir_name: str) -> QuickEvalPaths:
         fig_excess_hist_png=base / "excess_hist.png",
         fig_heatmap_png=base / "monthly_heatmap.png",
         fig_relative_equity_png=base / "relative_equity.png",
+        fig_dual_equity_png=base / "dual_equity.png",
     )
 
 
@@ -810,6 +881,7 @@ def _render_html_report(
     fig_hist = _encode_img_base64(paths.fig_excess_hist_png) if paths.fig_excess_hist_png.exists() else ""
     fig_heat = _encode_img_base64(paths.fig_heatmap_png) if paths.fig_heatmap_png.exists() else ""
     fig_rel = _encode_img_base64(paths.fig_relative_equity_png) if paths.fig_relative_equity_png.exists() else ""
+    fig_dual = _encode_img_base64(paths.fig_dual_equity_png) if paths.fig_dual_equity_png.exists() else ""
 
     # Metrics Table
     mt = []
@@ -1255,6 +1327,59 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
 
     equity, _ = _compute_equity_and_metrics(daily, risk_free_annual=risk_free)
     bench_eq, _ = _compute_equity_and_metrics(bench, risk_free_annual=risk_free)
+
+    # --- Dual Benchmark Comparison (399006 & self_eq) ---
+    d_min = daily.index.min().strftime("%Y%m%d")
+    d_max = daily.index.max().strftime("%Y%m%d")
+
+    # 1. Load 399006
+    bench_399006_s = _load_index_close_series(risk_data_path, "399006", d_min, d_max)
+    if bench_399006_s.empty:
+         bench_399006_ret = pd.Series(0.0, index=daily.index)
+    else:
+         bench_399006_ret = bench_399006_s.pct_change().fillna(0.0).reindex(daily.index).fillna(0.0)
+    bench_399006_eq, _ = _compute_equity_and_metrics(bench_399006_ret, risk_free_annual=risk_free)
+
+    # 2. Compute self_eq
+    bench_self_ret_raw = _compute_self_eq_ret(df_price, d_min, d_max)
+    bench_self_ret = bench_self_ret_raw.reindex(daily.index).fillna(0.0)
+    bench_self_eq, _ = _compute_equity_and_metrics(bench_self_ret, risk_free_annual=risk_free)
+
+    # 3. Compute Win Rates
+    win_rates_info = {}
+    
+    # vs 399006
+    if not bench_399006_s.empty:
+        daily_win_399006 = float((daily > bench_399006_ret).mean())
+        m_daily = _monthly_return_table(daily)["return"]
+        m_399006 = _monthly_return_table(bench_399006_ret)["return"]
+        if not m_daily.empty and not m_399006.empty:
+            m_win_399006 = float((m_daily > m_399006.reindex(m_daily.index).fillna(0.0)).mean())
+            win_rates_info["WinRate vs 399006"] = f"Daily={daily_win_399006:.1%}, Monthly={m_win_399006:.1%}"
+        else:
+            win_rates_info["WinRate vs 399006"] = f"Daily={daily_win_399006:.1%}"
+
+    # vs self_eq
+    daily_win_self = float((daily > bench_self_ret).mean())
+    m_self = _monthly_return_table(bench_self_ret)["return"]
+    m_daily_s = _monthly_return_table(daily)["return"]
+    if not m_daily_s.empty and not m_self.empty:
+        m_win_self = float((m_daily_s > m_self.reindex(m_daily_s.index).fillna(0.0)).mean())
+        win_rates_info["WinRate vs self_eq"] = f"Daily={daily_win_self:.1%}, Monthly={m_win_self:.1%}"
+    else:
+        win_rates_info["WinRate vs self_eq"] = f"Daily={daily_win_self:.1%}"
+
+    # 4. Plot
+    _plot_dual_equity_curve(
+        dates=daily.index,
+        equity=equity,
+        bench1_equity=bench_399006_eq,
+        bench1_name="399006",
+        bench2_equity=bench_self_eq,
+        bench2_name="self_eq",
+        out_path=paths.fig_dual_equity_png,
+        win_rates=win_rates_info
+    )
 
     win_tables = _compute_winrate_tables(daily)
     monthly_ret = _monthly_return_table(daily)

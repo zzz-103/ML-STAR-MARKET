@@ -129,7 +129,6 @@ def _prepare_output_dirs(args, logger, clean_save_dir: bool = True) -> tuple[str
 
 
 def _compute_temp_eval(df_ml: pd.DataFrame, temp_dir: str, top_k: int) -> dict[str, pd.Series]:
-    idx = pd.IndexSlice
     files = sorted(glob.glob(os.path.join(temp_dir, "*.parquet")))
     ic_rows: dict[pd.Timestamp, float] = {}
     top_rows: dict[pd.Timestamp, float] = {}
@@ -146,14 +145,15 @@ def _compute_temp_eval(df_ml: pd.DataFrame, temp_dir: str, top_k: int) -> dict[s
         if len(s) < max(20, int(top_k)):
             continue
         try:
-            y = df_ml.loc[idx[d, s.index.to_list()], "ret_next"]
+            y_day = df_ml.xs(d, level="date")["ret_next"]
         except Exception:
             continue
+        y = pd.to_numeric(y_day, errors="coerce").reindex(s.index)
         # Use concat to align indices safely and avoid unorderable warning
         df = pd.concat([
-            pd.to_numeric(y, errors="coerce").rename("y"),
             pd.to_numeric(s, errors="coerce").rename("pred")
-        ], axis=1, sort=True).dropna()
+        ], axis=1, sort=True)
+        df = df.join(y.rename("y"), how="inner").replace([np.inf, -np.inf], np.nan).dropna()
         if len(df) < max(20, int(top_k)):
             continue
         ic = df["pred"].corr(df["y"], method="spearman")
@@ -425,22 +425,26 @@ def run(argv: list[str] | None = None) -> None:
 
     log_section(logger, "因子重要性 (FactorImportance)")
     res = compute_factor_importance(df_ml, all_dates, predict_dates, final_features, args)
+    df_imp: pd.DataFrame | None = None
+    meta: dict | None = None
     if res is not None:
         df_imp, meta = res
         meta["dropped_factors"] = sorted(list(drop_factors))
         save_factor_importance(df_imp, meta, args, logger=logger)
-        try:
-            out_txt = write_factors_quick_review(
-                df_imp,
-                df_ml,
-                model_daily_ic=eval_map.get("daily_ic", None),
-                meta=meta,
-            )
-            logger.info("已刷新 quick review=%s", out_txt)
-        except Exception as e:
-            logger.info("quick review 生成失败: %s", e)
     else:
         logger.info("跳过因子重要性计算")
+
+    try:
+        out_txt = write_factors_quick_review(
+            df_imp,
+            df_ml,
+            meta=meta,
+            temp_dir=temp_dir,
+            top_k=int(getattr(args, "top_k", 30)),
+        )
+        logger.info("已刷新 quick review=%s", out_txt)
+    except Exception as e:
+        logger.info("quick review 生成失败: %s", e)
 
     log_section(logger, "组合构建 (Portfolio)")
     generate_positions_with_buffer(args, temp_dir=temp_dir, save_dir=save_dir, df_price=df_price, logger=logger)

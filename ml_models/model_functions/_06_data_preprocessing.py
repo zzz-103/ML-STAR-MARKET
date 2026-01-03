@@ -138,6 +138,7 @@ def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.Data
         try:
             cached = pd.read_pickle(cache_path)
             if isinstance(cached, dict) and "df_ml" in cached and "df_price" in cached:
+                logger.info("step=load_dataset_cache hit path=%s", cache_path)
                 return cached["df_ml"], cached["df_price"]
         except Exception:
             pass
