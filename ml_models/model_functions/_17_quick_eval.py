@@ -28,6 +28,7 @@ class QuickEvalPaths:
     fig_heatmap_png: Path
     fig_relative_equity_png: Path
     fig_dual_equity_png: Path
+    fig_rank_perf_png: Path
 
 
 def _ensure_dir(p: Path) -> None:
@@ -476,7 +477,170 @@ def _build_paths(save_dir: str, dir_name: str) -> QuickEvalPaths:
         fig_heatmap_png=base / "monthly_heatmap.png",
         fig_relative_equity_png=base / "relative_equity.png",
         fig_dual_equity_png=base / "dual_equity.png",
+        fig_rank_perf_png=base / "rank_performance.png",
     )
+
+
+def _compute_rank_performance(
+    *,
+    weights_dir: Path,
+    df_price: pd.DataFrame,
+    top_n: int,
+    risk_free_annual: float,
+) -> tuple[pd.DataFrame, pd.Series]:
+    top_n = int(top_n)
+    if top_n <= 0:
+        return pd.DataFrame(), pd.Series(dtype="float64")
+
+    items = _list_weight_files(weights_dir)
+    if len(items) == 0:
+        return pd.DataFrame(), pd.Series(dtype="float64")
+
+    p = df_price.copy()
+    p_cols = ["open", "close", "preclose"] if "preclose" in p.columns else ["open", "close"]
+    for c in p_cols:
+        p[c] = pd.to_numeric(p.get(c, np.nan), errors="coerce").astype(float)
+    p["open_next"] = p.groupby(level="code")["open"].shift(-1)
+    if "preclose" in p.columns:
+        p["preclose_next"] = p.groupby(level="code")["preclose"].shift(-1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r_intraday = p["close"] / p["open"]
+            r_overnight = p["open_next"] / p["preclose_next"]
+            rr_full = r_intraday * r_overnight - 1.0
+    else:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rr_full = p["open_next"] / p["open"] - 1.0
+    rr_full = rr_full.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    rows: list[dict[str, object]] = []
+    ic_rows: dict[pd.Timestamp, float] = {}
+    last_w = pd.Series(dtype="float64")
+
+    for d, fp in items:
+        w_today = _read_weight_csv(fp)
+        if len(w_today) > 0:
+            last_w = w_today
+        w = last_w
+        if len(w) == 0:
+            continue
+
+        w_sorted = w.sort_values(ascending=False)
+        codes = w_sorted.index.astype("string").tolist()[:top_n]
+        if len(codes) == 0:
+            continue
+
+        m = pd.MultiIndex.from_product([[d], codes], names=["date", "code"])
+        rr = rr_full.reindex(m).to_numpy(dtype=float)
+        rr = np.where(np.isfinite(rr), rr, 0.0)
+        ww = w_sorted.reindex(pd.Index(codes, dtype="string")).to_numpy(dtype=float)
+        ww = np.where(np.isfinite(ww), ww, 0.0)
+
+        if len(rr) >= 3:
+            rank_num = np.arange(1, len(rr) + 1, dtype="float64")
+            ic = pd.Series(-rank_num).corr(pd.Series(rr), method="spearman")
+            if ic is not None and np.isfinite(float(ic)):
+                ic_rows[pd.to_datetime(d)] = float(ic)
+
+        for i, code in enumerate(codes):
+            rows.append(
+                {
+                    "date": pd.to_datetime(d),
+                    "rank": int(i + 1),
+                    "code": str(code),
+                    "weight": float(ww[i]) if i < len(ww) else float("nan"),
+                    "ret": float(rr[i]) if i < len(rr) else float("nan"),
+                }
+            )
+
+    if len(rows) == 0:
+        return pd.DataFrame(), pd.Series(ic_rows).sort_index()
+
+    df = pd.DataFrame(rows).dropna(subset=["date", "rank", "ret"])
+    if df.empty:
+        return pd.DataFrame(), pd.Series(ic_rows).sort_index()
+
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values(["rank", "date"]).reset_index(drop=True)
+
+    metrics_rows: list[dict[str, object]] = []
+    for r in range(1, int(top_n) + 1):
+        s = df.loc[df["rank"] == r, ["date", "ret"]].dropna().drop_duplicates(subset=["date"]).set_index("date")["ret"].sort_index()
+        if len(s) == 0:
+            continue
+        equity, met = _compute_equity_and_metrics(s, risk_free_annual=risk_free_annual)
+        win_rate = float((s > 0).mean()) if len(s) else float("nan")
+        mean_ret = float(s.mean()) if len(s) else float("nan")
+        std_ret = float(s.std(ddof=1)) if len(s) > 1 else float("nan")
+        metrics_rows.append(
+            {
+                "rank": int(r),
+                "n_days": int(len(s)),
+                "mean_ret": mean_ret,
+                "std_ret": std_ret,
+                "win_rate": win_rate,
+                "annualized_return": float(met.get("annualized_return", float("nan"))),
+                "annualized_volatility": float(met.get("annualized_volatility", float("nan"))),
+                "annualized_sharpe": float(met.get("annualized_sharpe", float("nan"))),
+                "max_drawdown": float(met.get("max_drawdown", float("nan"))),
+                "total_return": float(equity.iloc[-1] - 1.0) if len(equity) else float("nan"),
+            }
+        )
+
+    df_rank = pd.DataFrame(metrics_rows)
+    if df_rank.empty:
+        return df_rank, pd.Series(ic_rows).sort_index()
+
+    df_rank = df_rank.sort_values("rank").reset_index(drop=True)
+    return df_rank, pd.Series(ic_rows).sort_index()
+
+
+def _plot_rank_performance(df_rank: pd.DataFrame, out_path: Path) -> None:
+    if df_rank is None or df_rank.empty:
+        plt.figure(figsize=(12, 4), dpi=120)
+        plt.title("Rank Performance (no data)")
+        plt.tight_layout()
+        plt.savefig(out_path)
+        plt.close()
+        return
+
+    d = df_rank.copy()
+    d["rank"] = pd.to_numeric(d["rank"], errors="coerce").astype(int)
+    d = d.sort_values("rank")
+    x = d["rank"].to_numpy(dtype=int)
+    ann = pd.to_numeric(d["annualized_return"], errors="coerce").to_numpy(dtype=float)
+    shp = pd.to_numeric(d["annualized_sharpe"], errors="coerce").to_numpy(dtype=float)
+    win = pd.to_numeric(d["win_rate"], errors="coerce").to_numpy(dtype=float)
+
+    best_idx = int(np.nanargmax(shp)) if np.isfinite(np.nanmax(shp)) else 0
+    best_rank = int(x[best_idx]) if len(x) else 1
+
+    plt.figure(figsize=(14, 10), dpi=120)
+
+    ax1 = plt.subplot(2, 1, 1)
+    ax1.bar(x, ann, color="#4C72B0", alpha=0.85)
+    ax1.axvline(best_rank, color="#cf222e", linestyle="--", linewidth=1.5, alpha=0.9)
+    ax1.set_title("Single-Rank Strategy Annualized Return (per rank)")
+    ax1.set_xlabel("Predicted Rank (1 = best)")
+    ax1.set_ylabel("Annualized Return")
+    ax1.grid(True, axis="y", linestyle="--", alpha=0.3)
+
+    ax2 = plt.subplot(2, 1, 2)
+    ax2.bar(x, shp, color="#55A868", alpha=0.85, label="Sharpe")
+    ax2.axvline(best_rank, color="#cf222e", linestyle="--", linewidth=1.5, alpha=0.9, label=f"Best Sharpe Rank={best_rank}")
+    ax2.set_title("Single-Rank Strategy Sharpe & Win Rate (per rank)")
+    ax2.set_xlabel("Predicted Rank (1 = best)")
+    ax2.set_ylabel("Sharpe")
+    ax2.grid(True, axis="y", linestyle="--", alpha=0.3)
+    ax2.legend(loc="upper right")
+
+    ax3 = ax2.twinx()
+    ax3.plot(x, win, color="#8172B2", linewidth=1.8, marker="o", markersize=4, alpha=0.9, label="WinRate")
+    ax3.set_ylabel("Win Rate")
+    ax3.set_ylim(0.0, 1.0)
+
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
 
 
 def _load_cache(paths: QuickEvalPaths) -> tuple[pd.DataFrame | None, dict | None]:
@@ -841,6 +1005,7 @@ def _render_html_report(
     initial_capital: float,
     fee_rate: float,
     source_info: dict[str, str],
+    rank_perf_html: str = "",
 ) -> None:
     d0 = pd.to_datetime(df_daily["date"].min()).strftime("%Y%m%d") if not df_daily.empty else ""
     d1 = pd.to_datetime(df_daily["date"].max()).strftime("%Y%m%d") if not df_daily.empty else ""
@@ -882,6 +1047,15 @@ def _render_html_report(
     fig_heat = _encode_img_base64(paths.fig_heatmap_png) if paths.fig_heatmap_png.exists() else ""
     fig_rel = _encode_img_base64(paths.fig_relative_equity_png) if paths.fig_relative_equity_png.exists() else ""
     fig_dual = _encode_img_base64(paths.fig_dual_equity_png) if paths.fig_dual_equity_png.exists() else ""
+    fig_rank = _encode_img_base64(paths.fig_rank_perf_png) if paths.fig_rank_perf_png.exists() else ""
+    rank_chart_html = ""
+    if fig_rank:
+        rank_chart_html = (
+            "<div class=\"chart-card\">"
+            "<h3>预测排名表现 (Rank Performance)</h3>"
+            f"<img src=\"{fig_rank}\"/>"
+            "</div>"
+        )
 
     # Metrics Table
     mt = []
@@ -1259,12 +1433,14 @@ def _render_html_report(
         <h3>月度收益热力图 (Monthly Return Heatmap)</h3>
         <img src="{fig_heat}"/>
     </div>
+    {rank_chart_html}
   </div>
 
   <h2>详细数据表 (Detailed Tables)</h2>
   {win_html}
   {month_cmp}
   {passive_html}
+  {rank_perf_html}
 
   <div class="notes">
     <strong>说明:</strong> 基准日收益：当 bench_method=self_eq 时，采用 price_data_path 中全样本等权 close-to-close 平均涨跌幅；否则采用 risk_data_path 指定指数的收盘价涨跌幅。策略收益采用 price_data_path 数据的 open-to-next-open 收益，并应用当日权重。净收益已扣除基于调仓权重的双边交易手续费。
@@ -1391,6 +1567,87 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
     _plot_excess_hist(ex, paths.fig_excess_hist_png)
     _plot_monthly_heatmap(monthly_ret, paths.fig_heatmap_png)
 
+    rank_top_n = int(getattr(args, "quick_eval_rank_top_n", 20))
+    df_rank, rank_ic_s = _compute_rank_performance(
+        weights_dir=weights_dir,
+        df_price=df_price,
+        top_n=rank_top_n,
+        risk_free_annual=risk_free,
+    )
+    if df_rank is not None and not df_rank.empty:
+        _plot_rank_performance(df_rank, paths.fig_rank_perf_png)
+
+    rank_perf_html = ""
+    if df_rank is not None and not df_rank.empty:
+        view = df_rank.copy()
+        view["rank"] = pd.to_numeric(view["rank"], errors="coerce").astype(int)
+        view = view.sort_values("rank")
+        for c in ["mean_ret", "std_ret", "annualized_return", "annualized_volatility", "max_drawdown", "total_return"]:
+            if c in view.columns:
+                view[c] = pd.to_numeric(view[c], errors="coerce")
+        if "annualized_sharpe" in view.columns:
+            view["annualized_sharpe"] = pd.to_numeric(view["annualized_sharpe"], errors="coerce")
+        if "win_rate" in view.columns:
+            view["win_rate"] = pd.to_numeric(view["win_rate"], errors="coerce")
+
+        cols = [
+            "rank",
+            "n_days",
+            "mean_ret",
+            "win_rate",
+            "annualized_return",
+            "annualized_sharpe",
+            "max_drawdown",
+            "total_return",
+        ]
+        cols = [c for c in cols if c in view.columns]
+        show = view[cols].copy()
+        if "mean_ret" in show.columns:
+            show["mean_ret"] = show["mean_ret"].map(lambda x: f"{x:.4%}" if np.isfinite(float(x)) else "NaN")
+        if "win_rate" in show.columns:
+            show["win_rate"] = show["win_rate"].map(lambda x: f"{x:.2%}" if np.isfinite(float(x)) else "NaN")
+        if "annualized_return" in show.columns:
+            show["annualized_return"] = show["annualized_return"].map(lambda x: f"{x:.2%}" if np.isfinite(float(x)) else "NaN")
+        if "annualized_sharpe" in show.columns:
+            show["annualized_sharpe"] = show["annualized_sharpe"].map(lambda x: f"{x:.3f}" if np.isfinite(float(x)) else "NaN")
+        if "max_drawdown" in show.columns:
+            show["max_drawdown"] = show["max_drawdown"].map(lambda x: f"{x:.2%}" if np.isfinite(float(x)) else "NaN")
+        if "total_return" in show.columns:
+            show["total_return"] = show["total_return"].map(lambda x: f"{x:.2%}" if np.isfinite(float(x)) else "NaN")
+
+        ic_mean = float(rank_ic_s.mean()) if rank_ic_s is not None and len(rank_ic_s) else float("nan")
+        ic_std = float(rank_ic_s.std(ddof=1)) if rank_ic_s is not None and len(rank_ic_s) > 1 else float("nan")
+        ic_ir = float(ic_mean / ic_std) if np.isfinite(ic_mean) and np.isfinite(ic_std) and ic_std > 1e-12 else float("nan")
+        ic_pos = float((rank_ic_s > 0).mean()) if rank_ic_s is not None and len(rank_ic_s) else float("nan")
+        ic_n = int(len(rank_ic_s)) if rank_ic_s is not None else 0
+
+        best_by_sharpe = None
+        if "annualized_sharpe" in df_rank.columns:
+            tmp = pd.to_numeric(df_rank["annualized_sharpe"], errors="coerce")
+            if tmp.notna().any():
+                best_by_sharpe = int(df_rank.loc[tmp.idxmax(), "rank"])
+
+        best_by_ann = None
+        if "annualized_return" in df_rank.columns:
+            tmp = pd.to_numeric(df_rank["annualized_return"], errors="coerce")
+            if tmp.notna().any():
+                best_by_ann = int(df_rank.loc[tmp.idxmax(), "rank"])
+
+        summary = (
+            f"<div class='muted'>rank_ic(Spearman, pred=-rank vs ret): mean={ic_mean:.4f} ir={ic_ir:.3f} pos_rate={ic_pos:.1%} n_days={ic_n}"
+            + (f" | best_rank_by_sharpe={best_by_sharpe}" if best_by_sharpe is not None else "")
+            + (f" | best_rank_by_annret={best_by_ann}" if best_by_ann is not None else "")
+            + "</div>"
+        )
+
+        rank_perf_html = (
+            "<div class='card full-width'>"
+            "<h3>预测排名-盈利关系 (Rank → Return)</h3>"
+            + summary
+            + show.to_html(classes="tbl", escape=False, border=0, index=False)
+            + "</div>"
+        )
+
     source_info = {
         "权重目录 (Weights Dir)": str(weights_dir),
         "价格数据 (Price Data)": str(getattr(df_price, "_source_path", "InMemory")),
@@ -1408,6 +1665,7 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
         initial_capital=initial_capital,
         fee_rate=fee_rate,
         source_info=source_info,
+        rank_perf_html=rank_perf_html,
     )
 
     _render_cli_tables(df_daily, metrics, bench_metrics, level=level, initial_capital=initial_capital, fee_rate=fee_rate)

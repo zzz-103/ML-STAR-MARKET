@@ -56,6 +56,7 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     close = _num_series("close")
     volume = _num_series("volume")
     turnover = _num_series("turnover")
+    float_market_cap = _num_series("float_market_cap")
 
     grouped = df.groupby(level="code", sort=False)
 
@@ -150,5 +151,68 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     output["f_shadow_skew"] = ((close - low) - (high - close)) / denom_hl
+
+    daily_vwap = turnover / (volume + 1e-6)
+    daily_vwap_safe = daily_vwap.replace(0.0, np.nan)
+    smart_score = (close - daily_vwap_safe) / daily_vwap_safe
+    smart_num = (
+        (smart_score * volume)
+        .groupby(level="code")
+        .rolling(20, min_periods=20)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
+    smart_den = (
+        volume.groupby(level="code")
+        .rolling(20, min_periods=20)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
+    output["f_smart_money_20"] = smart_num / (smart_den + 1e-6)
+
+    sm_rank_20 = (
+        output["f_smart_money_20"]
+        .groupby(level="code")
+        .rolling(20, min_periods=20)
+        .rank(pct=True)
+        .reset_index(level=0, drop=True)
+    )
+    roc_rank_20 = (
+        output["roc_20"]
+        .groupby(level="code")
+        .rolling(20, min_periods=20)
+        .rank(pct=True)
+        .reset_index(level=0, drop=True)
+    )
+    output["f_smart_money_div"] = sm_rank_20 - roc_rank_20
+
+    vp_corr_20 = grouped.apply(
+        lambda x: pd.to_numeric(x["volume"], errors="coerce")
+        .diff()
+        .rolling(20, min_periods=20)
+        .corr(pd.to_numeric(x["close"], errors="coerce").replace(0.0, np.nan).pct_change(fill_method=None).abs())
+    ).reset_index(level=0, drop=True)
+    output["f_vp_rank_corr_20"] = -1.0 * vp_corr_20
+
+    turn_rate = None
+    if "turnover_rate" in df.columns:
+        tr = _num_series("turnover_rate")
+        if not tr.isna().all():
+            turn_rate = tr
+    if turn_rate is None and "Turnover" in df.columns:
+        tr = _num_series("Turnover")
+        if not tr.isna().all():
+            turn_rate = tr
+    if turn_rate is None:
+        turn_rate = turnover / (float_market_cap + 1e-6)
+
+    turn_ma20 = turn_rate.groupby(level="code").transform(lambda x: x.rolling(20, min_periods=20).mean())
+    turn_std20 = turn_rate.groupby(level="code").transform(lambda x: x.rolling(20, min_periods=20).std())
+    output["f_turn_stability_20"] = turn_std20 / (turn_ma20 + 1e-6)
+
+    turn_ma40 = turn_rate.groupby(level="code").transform(lambda x: x.rolling(40, min_periods=40).mean())
+    output["f_turn_growth_20_40"] = (turn_ma20 / (turn_ma40 + 1e-6)) - 1.0
+
+    output["f_abnormal_turn_20"] = (turn_rate - turn_ma20) / (turn_std20 + 1e-6)
 
     return output

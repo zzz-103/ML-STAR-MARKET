@@ -70,6 +70,7 @@ DEFAULT_PORTFOLIO = {
     "buffer_k": 30,
     "rebalance_period": 5,
     "rebalance_turnover_cap": 0.90,
+    "keep_cash_idle": False,
     "smooth_window": 5,
     "inertia_ratio": 1.02,
     "emergency_exit_rank": 50,
@@ -195,6 +196,12 @@ DEFAULT_KEEP_FACTORS = [
     "vol_20",
     "f_candle_strength",
     "f_amihud_liquidity_20",
+    "f_smart_money_20",
+    #"f_smart_money_div",
+    "f_vp_rank_corr_20",
+    "f_turn_stability_20",
+    "f_turn_growth_20_40",
+    "f_abnormal_turn_20",
 ]
 
 DEFAULT_MONOTONE_CONSTRAINTS = {
@@ -212,4 +219,9 @@ DEFAULT_MONOTONE_CONSTRAINTS = {
     "rsi_6": 0,
     "f_candle_strength": 0,
     "f_amihud_liquidity_20": 1,
+    "f_smart_money_20": 0,
+    "f_vp_rank_corr_20": 0,
+    "f_turn_growth_20_40": 0,
+    "f_abnormal_turn_20": 0,
+    "f_turn_stability_20": 0,
 }

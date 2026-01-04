@@ -288,7 +288,6 @@ def write_factors_quick_review(
 ) -> str:
     out_path = Path(output_path) if output_path else (Path(__file__).resolve().parent.parent / "factors_quick_review.txt")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    _ = meta
     _ = show_top_n
 
     df_stats = generate_factors_quick_review(
@@ -336,6 +335,21 @@ def write_factors_quick_review(
         lines.append(
             f"multi_factor(model_score)_ic: {y1} mean=nan ir=nan n_days=0 | {y2} mean=nan ir=nan n_days=0"
         )
+
+    if meta is not None:
+        rank_meta = meta.get("rank_perf") if isinstance(meta, dict) else None
+        if rank_meta is None and isinstance(meta, dict):
+            rank_meta = meta.get("rank_performance")
+        if rank_meta is None and isinstance(meta, dict):
+            rank_meta = meta.get("quick_eval_rank_perf")
+        if rank_meta is not None:
+            lines.append("")
+            lines.append("rank_performance:")
+            if isinstance(rank_meta, dict):
+                for k in sorted(rank_meta.keys(), key=lambda x: str(x)):
+                    lines.append(f"  {k}: {rank_meta.get(k)}")
+            else:
+                lines.append(f"  {rank_meta}")
 
     lines.append("")
     if df_stats is None or len(df_stats) == 0:

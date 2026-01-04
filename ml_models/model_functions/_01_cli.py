@@ -54,6 +54,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--buffer-k", type=int, default=cfg.DEFAULT_PORTFOLIO["buffer_k"])
     parser.add_argument("--rebalance-period", type=int, default=cfg.DEFAULT_PORTFOLIO["rebalance_period"])
     parser.add_argument("--rebalance-turnover-cap", type=float, default=cfg.DEFAULT_PORTFOLIO["rebalance_turnover_cap"])
+    parser.add_argument("--keep-cash-idle", action=argparse.BooleanOptionalAction, default=cfg.DEFAULT_PORTFOLIO.get("keep_cash_idle", False))
     parser.add_argument("--smooth-window", type=int, default=cfg.DEFAULT_PORTFOLIO["smooth_window"])
     parser.add_argument("--inertia-ratio", type=float, default=cfg.DEFAULT_PORTFOLIO["inertia_ratio"])
     parser.add_argument("--emergency-exit-rank", type=int, default=cfg.DEFAULT_PORTFOLIO["emergency_exit_rank"])
