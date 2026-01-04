@@ -29,14 +29,12 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
     objective = str(getattr(args, "xgb_objective", "reg:squarederror"))
     model_kind = "Rank" if objective.startswith("rank:") else "Regression"
     timing_method = str(getattr(args, "timing_method", "score")).lower()
-    keep_cash_idle = bool(getattr(args, "keep_cash_idle", False))
     logger.info(
-        "step=generate_positions top_k=%d buffer_k=%d rebalance=%d turnover_cap=%.3f keep_cash_idle=%d inertia=%.4f smooth=%d stop_rank=%d band=%.6f max_w=%.6f min_w=%.6f non_rebalance=%s model=%s timing=%s",
+        "step=generate_positions top_k=%d buffer_k=%d rebalance=%d turnover_cap=%.3f inertia=%.4f smooth=%d stop_rank=%d band=%.6f max_w=%.6f min_w=%.6f non_rebalance=%s model=%s timing=%s",
         int(getattr(args, "top_k")),
         int(getattr(args, "buffer_k")),
         int(getattr(args, "rebalance_period")),
         float(getattr(args, "rebalance_turnover_cap", 1.0)),
-        int(keep_cash_idle),
         float(getattr(args, "inertia_ratio", 1.0)),
         int(getattr(args, "smooth_window", 1)),
         int(getattr(args, "emergency_exit_rank", 0)),
@@ -636,42 +634,18 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             sell_candidates = [c for c in prev_syms if (c not in desired_set) or (c in stoploss_set)]
             sell_candidates = [c for c in sell_candidates if c in buyable.index and bool(buyable.loc[c])]
             sell_exec = [c for c in sell_candidates if abs(float(prev_w.get(c, 0.0))) >= band_thr]
+            buy_budget = float(prev_w.reindex(sell_exec).sum()) if len(sell_exec) > 0 else 0.0
             w_next = prev_w.drop(index=[c for c in sell_exec if c in prev_w.index], errors="ignore").copy()
-            if keep_cash_idle:
-                buy_budget = float(prev_w.reindex(sell_exec).sum()) if len(sell_exec) > 0 else 0.0
-            else:
-                buy_budget = 1.0 - float(w_next.sum()) if len(w_next) > 0 else 1.0
-            if (not np.isfinite(buy_budget)) or buy_budget < 0.0:
-                buy_budget = 0.0
             buy_candidates = [c for c in ranked_adj_codes if (c in desired_set and c not in prev_syms)]
             buy_candidates = [c for c in buy_candidates if c in buyable.index and bool(buyable.loc[c])]
             buy_keep = buy_candidates[:max_new]
 
         if buy_budget > 0.0 and len(buy_keep) > 0:
-            top_k_i = int(getattr(args, "top_k"))
-            rank_pos_map = {str(c): int(i) + 1 for i, c in enumerate(ranked_adj_codes)}
-            buy_keep_idx = pd.Index([str(c) for c in buy_keep], dtype="string")
-            pos = np.asarray([rank_pos_map.get(str(c), 1_000_000) for c in buy_keep_idx], dtype=np.int64)
-            mult = np.ones_like(pos, dtype=np.float64)
-            peak_l = 4
-            peak_r = min(7, top_k_i)
-            mid_l = 2
-            mid_r = min(10, top_k_i)
-            mult[pos == 1] = 0.6
-            if mid_r >= mid_l:
-                mult[(pos >= mid_l) & (pos <= mid_r)] = 1.25
-            if peak_r >= peak_l:
-                mult[(pos >= peak_l) & (pos <= peak_r)] = 1.6
-            tail1_l = mid_r + 1
-            tail1_r = min(15, top_k_i)
-            if tail1_r >= tail1_l:
-                mult[(pos >= tail1_l) & (pos <= tail1_r)] = 0.85
-            mult[pos >= max(16, tail1_l)] = 0.6
-            s = float(np.nansum(mult))
-            if (not np.isfinite(s)) or s <= 0:
-                mult = np.ones_like(mult, dtype=np.float64)
-                s = float(mult.sum())
-            w_buy = pd.Series((mult / s) * float(buy_budget), index=buy_keep_idx, dtype="float64")
+            w_buy = pd.Series(
+                float(buy_budget) / len(buy_keep),
+                index=pd.Index(buy_keep, dtype="string"),
+                dtype="float64",
+            )
             observe_scale = float(getattr(args, "industry_fast_reversal_observe_scale", 1.0))
             observe_scale = 1.0 if not np.isfinite(observe_scale) else max(0.0, observe_scale)
             if observe_scale < 1.0 and len(fast_reversal_new_candidates) > 0 and len(w_buy) > 0:

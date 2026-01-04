@@ -321,6 +321,10 @@ def run(argv: list[str] | None = None) -> None:
         use_default_keep_factors=bool(getattr(args, "use_default_keep_factors", True)),
         keep_factors_csv=getattr(args, "keep_factors", None),
     )
+    use_keep_filtering = bool(getattr(args, "use_default_keep_factors", True)) or bool(getattr(args, "keep_factors", None))
+    if use_keep_filtering:
+        keep_factors.discard("f_smart_money_div")
+        keep_factors.add("f_vp_rank_corr_20")
     final_features = apply_feature_filters(raw_features, drop_factors, keep_factors)
     log_section(logger, "特征工程 (Features)")
     logger.info("最终特征数=%d 示例=%s", int(len(final_features)), final_features[:8])
