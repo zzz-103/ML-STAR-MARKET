@@ -101,6 +101,7 @@ DEFAULT_PORTFOLIO = {
     "industry_bull_enable": True,
     "industry_bull_ma_window": 60,
     "industry_bull_max_weight": 0.60,
+    "use_current_day_open_filter": False,
 }
 
 DEFAULT_TIMING = {
@@ -148,6 +149,8 @@ DEFAULT_QUICK_EVAL = {
     "quick_eval_fee_rate": 0.0003,
     "quick_eval_slippage": 0.0,
     "quick_eval_capital": 10_000_000.0,
+    "quick_eval_price": "open",
+    "quick_eval_exec_model": "limit_aware",
 }
 
 DEFAULT_DROP_FACTORS = [

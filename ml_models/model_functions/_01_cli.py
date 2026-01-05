@@ -63,6 +63,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-weight", type=float, default=cfg.DEFAULT_PORTFOLIO["min_weight"])
     parser.add_argument("--non-rebalance-action", choices=["empty", "carry"], default=cfg.DEFAULT_PORTFOLIO["non_rebalance_action"])
     parser.add_argument("--limit-policy", choices=["freeze", "sell_only"], default=cfg.DEFAULT_PORTFOLIO["limit_policy"])
+    parser.add_argument(
+        "--use-current-day-open-filter",
+        action=argparse.BooleanOptionalAction,
+        default=cfg.DEFAULT_PORTFOLIO.get("use_current_day_open_filter", False),
+    )
     parser.add_argument("--industry-enable", action=argparse.BooleanOptionalAction, default=cfg.DEFAULT_PORTFOLIO.get("industry_enable", False))
     parser.add_argument("--industry-mom-window", type=int, default=cfg.DEFAULT_PORTFOLIO.get("industry_mom_window", 20))
     parser.add_argument("--industry-rank-strong-pct", type=float, default=cfg.DEFAULT_PORTFOLIO.get("industry_rank_strong_pct", 0.2))
@@ -171,6 +176,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quick-eval-fee-rate", type=float, default=cfg.DEFAULT_QUICK_EVAL["quick_eval_fee_rate"])
     parser.add_argument("--quick-eval-slippage", type=float, default=cfg.DEFAULT_QUICK_EVAL["quick_eval_slippage"])
     parser.add_argument("--quick-eval-capital", type=float, default=cfg.DEFAULT_QUICK_EVAL["quick_eval_capital"])
+    parser.add_argument(
+        "--quick-eval-price",
+        choices=["open", "vwap"],
+        default=cfg.DEFAULT_QUICK_EVAL.get("quick_eval_price", "open"),
+    )
+    parser.add_argument(
+        "--quick-eval-exec-model",
+        choices=["naive", "limit_aware"],
+        default=cfg.DEFAULT_QUICK_EVAL.get("quick_eval_exec_model", "limit_aware"),
+    )
 
     default_workers = max(1, (os.cpu_count() or 1) - 2)
     parser.add_argument("--n-workers", type=int, default=default_workers)

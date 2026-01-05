@@ -66,6 +66,14 @@ def _colorize(value: float | None, *, higher_better: bool, good: float, bad: flo
     return f"{_ansi('yellow')}{s}{_ansi('reset')}"
 
 
+def _col_as_series(df_price: pd.DataFrame, col: str, default: float = np.nan) -> pd.Series:
+    if col in df_price.columns:
+        s = df_price[col]
+        if isinstance(s, pd.Series):
+            return s
+    return pd.Series(default, index=df_price.index, name=col)
+
+
 def _read_weight_csv(path: Path) -> pd.Series:
     if (not path.exists()) or path.stat().st_size == 0:
         return pd.Series(dtype="float64")
@@ -97,6 +105,39 @@ def _list_weight_files(weights_dir: Path) -> list[tuple[pd.Timestamp, Path]]:
         items.append((d, fp))
     items.sort(key=lambda x: x[0])
     return items
+
+
+def _get_exec_price_series(df_price: pd.DataFrame, *, price_method: str) -> pd.Series:
+    method = str(price_method).lower().strip()
+    if method == "vwap":
+        if "vwap" in df_price.columns:
+            raw = _col_as_series(df_price, "vwap")
+        elif ("turnover" in df_price.columns) and ("volume" in df_price.columns):
+            vol = pd.to_numeric(_col_as_series(df_price, "volume"), errors="coerce").astype(float)
+            amt = pd.to_numeric(_col_as_series(df_price, "turnover"), errors="coerce").astype(float)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                raw = amt / vol
+        elif ("amount" in df_price.columns) and ("volume" in df_price.columns):
+            vol = pd.to_numeric(_col_as_series(df_price, "volume"), errors="coerce").astype(float)
+            amt = pd.to_numeric(_col_as_series(df_price, "amount"), errors="coerce").astype(float)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                raw = amt / vol
+        else:
+            raw = _col_as_series(df_price, "open")
+    else:
+        raw = _col_as_series(df_price, "open")
+
+    s = pd.to_numeric(raw, errors="coerce").astype(float)
+    s = s.where(s > 0)
+    return s
+
+
+def _get_limit_series(df_price: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    upper = pd.to_numeric(_col_as_series(df_price, "upper_limit"), errors="coerce").astype(float)
+    lower = pd.to_numeric(_col_as_series(df_price, "lower_limit"), errors="coerce").astype(float)
+    upper = upper.where(upper > 0)
+    lower = lower.where(lower > 0)
+    return upper, lower
 
 
 def _load_index_close_series(csv_path: str, index_code: str, start_date: str, end_date: str) -> pd.Series:
@@ -389,7 +430,7 @@ def _plot_relative_equity(dates: pd.DatetimeIndex, equity: pd.Series, bench_equi
 
 
 def _compute_self_eq_ret(df_price: pd.DataFrame, start_s: str, end_s: str) -> pd.Series:
-    close = pd.to_numeric(df_price.get("close", np.nan), errors="coerce").astype(float)
+    close = pd.to_numeric(_col_as_series(df_price, "close"), errors="coerce").astype(float)
     close = close.where(close > 0)
     ret = close.groupby(level="code").pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
     bench_ret = ret.groupby(level="date").mean().sort_index().fillna(0.0).astype("float64")
@@ -487,6 +528,7 @@ def _compute_rank_performance(
     df_price: pd.DataFrame,
     top_n: int,
     risk_free_annual: float,
+    price_method: str,
 ) -> tuple[pd.DataFrame, pd.Series]:
     top_n = int(top_n)
     if top_n <= 0:
@@ -496,20 +538,10 @@ def _compute_rank_performance(
     if len(items) == 0:
         return pd.DataFrame(), pd.Series(dtype="float64")
 
-    p = df_price.copy()
-    p_cols = ["open", "close", "preclose"] if "preclose" in p.columns else ["open", "close"]
-    for c in p_cols:
-        p[c] = pd.to_numeric(p.get(c, np.nan), errors="coerce").astype(float)
-    p["open_next"] = p.groupby(level="code")["open"].shift(-1)
-    if "preclose" in p.columns:
-        p["preclose_next"] = p.groupby(level="code")["preclose"].shift(-1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            r_intraday = p["close"] / p["open"]
-            r_overnight = p["open_next"] / p["preclose_next"]
-            rr_full = r_intraday * r_overnight - 1.0
-    else:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            rr_full = p["open_next"] / p["open"] - 1.0
+    px = _get_exec_price_series(df_price, price_method=price_method)
+    px_next = px.groupby(level="code").shift(-1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rr_full = px_next / px - 1.0
     rr_full = rr_full.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
     rows: list[dict[str, object]] = []
@@ -673,6 +705,8 @@ def _compute_daily_from_weights(
     risk_free_annual: float,
     fee_rate: float,
     slippage: float = 0.0,  # Added slippage parameter
+    price_method: str = "open",
+    exec_model: str = "limit_aware",
 ) -> tuple[pd.DataFrame, dict[str, float], dict[str, float]]:
     """
     Compute daily returns from weights and price data.
@@ -704,6 +738,8 @@ def _compute_daily_from_weights(
         "risk_free_annual": float(risk_free_annual),
         "fee_rate": float(fee_rate),
         "slippage": float(slippage),
+        "price_method": str(price_method),
+        "exec_model": str(exec_model),
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "risk_data_mtime": float(Path(risk_data_path).stat().st_mtime) if risk_data_path and os.path.exists(risk_data_path) else None,
     }
@@ -711,7 +747,7 @@ def _compute_daily_from_weights(
     can_reuse = False
     if enable_cache and cache_df is not None and cache_meta is not None:
 
-        keys = ["weights_dir", "risk_data_path", "risk_index_code", "bench_method", "fee_rate", "slippage"]
+        keys = ["weights_dir", "risk_data_path", "risk_index_code", "bench_method", "fee_rate", "slippage", "price_method", "exec_model"]
         can_reuse = all(str(cache_meta.get(k)) == str(meta.get(k)) for k in keys)
 
     cached_map: dict[pd.Timestamp, dict[str, float]] = {}
@@ -725,38 +761,16 @@ def _compute_daily_from_weights(
         except Exception:
             cached_map = {}
 
-
-    open_s = pd.to_numeric(df_price.get("open", np.nan), errors="coerce").astype(float)
-    
-    # Prepare Adjusted Return Series (Open-to-NextOpen with PreClose Adjustment)
-    # R = (Close_t / Open_t) * (Open_{t+1} / PreClose_{t+1}) - 1
-    p = df_price.copy()
-    if "preclose" in p.columns:
-        p_cols = ["open", "close", "preclose"]
-    else:
-        p_cols = ["open", "close"]
-    
-    for c in p_cols:
-        p[c] = pd.to_numeric(p.get(c, np.nan), errors="coerce").astype(float)
-    
-    p["open_next"] = p.groupby(level="code")["open"].shift(-1)
-    
-    if "preclose" in p.columns:
-        p["preclose_next"] = p.groupby(level="code")["preclose"].shift(-1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            r_intraday = p["close"] / p["open"]
-            r_overnight = p["open_next"] / p["preclose_next"]
-            rr_full = r_intraday * r_overnight - 1.0
-    else:
-        # Fallback to simple Open-to-NextOpen
-        with np.errstate(divide="ignore", invalid="ignore"):
-            rr_full = p["open_next"] / p["open"] - 1.0
-            
-    rr_full = rr_full.fillna(0.0).replace([np.inf, -np.inf], 0.0)
+    px = _get_exec_price_series(df_price, price_method=price_method)
+    px_next = px.groupby(level="code").shift(-1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rr_full = px_next / px - 1.0
+    rr_full = rr_full.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    upper_s, lower_s = _get_limit_series(df_price)
 
     idx = pd.IndexSlice
     if str(bench_method).lower() in ("self_eq", "self_equal_weight", "self_equal"):
-        close = pd.to_numeric(df_price.get("close", np.nan), errors="coerce").astype(float)
+        close = pd.to_numeric(_col_as_series(df_price, "close"), errors="coerce").astype(float)
         close = close.where(close > 0)
         ret = close.groupby(level="code").pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
         bench_ret = ret.groupby(level="date").mean().sort_index().fillna(0.0).astype("float64")
@@ -769,7 +783,9 @@ def _compute_daily_from_weights(
         bench_ret = bench_close.pct_change().astype("float64")
 
     rows: list[dict[str, object]] = []
-    last_w = pd.Series(dtype="float64")
+    last_target_w = pd.Series(dtype="float64")
+    hold_w = pd.Series(dtype="float64")
+    cash_w = 1.0
     for d, fp in items:
         mtime = float(fp.stat().st_mtime) if fp.exists() else None
         size = int(fp.stat().st_size) if fp.exists() else 0
@@ -794,58 +810,128 @@ def _compute_daily_from_weights(
             )
             continue
 
-        prev_w = last_w
+        prev_target = last_target_w
         w_today = _read_weight_csv(fp)
         rebalanced = 1 if len(w_today) > 0 else 0
         if rebalanced:
-            last_w = w_today
-        w = last_w
+            last_target_w = w_today
+        target_w = last_target_w
+
+        exec_mode = str(exec_model).lower().strip()
+        if exec_mode not in ("naive", "limit_aware"):
+            exec_mode = "limit_aware"
 
         turnover = 0.0
-
         fee_cost = 0.0
         slippage_cost = 0.0
         passive_sell_cnt = 0
         reduce_cnt = 0
-        if rebalanced and len(prev_w) > 0:
-            all_codes = prev_w.index.union(w_today.index).astype("string")
-            prev_vec = prev_w.reindex(all_codes).fillna(0.0).astype(float)
+
+        if rebalanced and len(prev_target) > 0:
+            all_codes = prev_target.index.union(w_today.index).astype("string")
+            prev_vec = prev_target.reindex(all_codes).fillna(0.0).astype(float)
             new_vec = w_today.reindex(all_codes).fillna(0.0).astype(float)
-            with np.errstate(invalid="ignore"):
-                turnover = 0.5 * float((new_vec - prev_vec).abs().sum())
             sold_out = (prev_vec > 0) & (new_vec <= 0)
             reduced = (prev_vec > 0) & (new_vec > 0) & (new_vec < prev_vec)
             passive_sell_cnt = int(sold_out.sum())
             reduce_cnt = int(reduced.sum())
-            fee_cost = float(turnover * (2.0 * float(fee_rate)))
-            # Slippage on turnover (buy + sell amount) = turnover * 2 * slippage
-            slippage_cost = float(turnover * (2.0 * float(slippage)))
 
-        elif rebalanced and len(prev_w) == 0:
-             # First day buy turnover = 1.0 (0 -> 1)
-             # Fee is only on Buy (1.0), not Buy+Sell. 
-             # However, to be conservative or match some systems that charge round-trip on entry for PnL estimation?
-             # User's data: 2023 Fee ~2.3%. 
-             # If I use 2.0x, I get ~2.5%. If 1.0x, I might get ~2.3%.
-             turnover = 1.0
-             fee_cost = float(turnover * (float(fee_rate))) # 1.0x for initial entry
-             slippage_cost = float(turnover * float(slippage)) # 1.0x for initial entry
+        if exec_mode == "naive":
+            if rebalanced and len(prev_target) > 0:
+                all_codes = prev_target.index.union(w_today.index).astype("string")
+                prev_vec = prev_target.reindex(all_codes).fillna(0.0).astype(float)
+                new_vec = w_today.reindex(all_codes).fillna(0.0).astype(float)
+                with np.errstate(invalid="ignore"):
+                    turnover = 0.5 * float((new_vec - prev_vec).abs().sum())
+                fee_cost = float(turnover * (2.0 * float(fee_rate)))
+                slippage_cost = float(turnover * (2.0 * float(slippage)))
+            elif rebalanced and len(prev_target) == 0 and len(w_today) > 0:
+                turnover = float(w_today.sum())
+                fee_cost = float(turnover * float(fee_rate))
+                slippage_cost = float(turnover * float(slippage))
 
-        if len(w) == 0:
-            port_r = 0.0
-        else:
-            codes = w.index.astype("string").tolist()
-            try:
-                m = pd.MultiIndex.from_product([[d], codes], names=["date", "code"])
-                rr = rr_full.reindex(m).to_numpy(dtype=float)
-                rr = np.where(np.isfinite(rr), rr, 0.0)
-                ww = w.reindex(pd.Index(codes, dtype="string")).to_numpy(dtype=float)
-                ww = np.where(np.isfinite(ww), ww, 0.0)
-                port_r = float(np.dot(ww, rr))
-            except Exception:
+            if len(target_w) == 0:
                 port_r = 0.0
+            else:
+                codes = target_w.index.astype("string").tolist()
+                try:
+                    m = pd.MultiIndex.from_product([[d], codes], names=["date", "code"])
+                    rr = rr_full.reindex(m).to_numpy(dtype=float)
+                    rr = np.where(np.isfinite(rr), rr, 0.0)
+                    ww = target_w.reindex(pd.Index(codes, dtype="string")).to_numpy(dtype=float)
+                    ww = np.where(np.isfinite(ww), ww, 0.0)
+                    port_r = float(np.dot(ww, rr))
+                except Exception:
+                    port_r = 0.0
+        else:
+            if rebalanced and len(target_w) == 0:
+                hold_w = pd.Series(dtype="float64")
+                cash_w = 1.0
+            elif rebalanced:
+                hold_codes = hold_w.index.astype("string") if len(hold_w) else pd.Index([], dtype="string")
+                tgt_codes = target_w.index.astype("string") if len(target_w) else pd.Index([], dtype="string")
+                all_codes = hold_codes.union(tgt_codes).astype("string")
 
-        port_r_net = float(port_r - fee_cost - slippage_cost)
+                prev_hold = hold_w.reindex(all_codes).fillna(0.0).astype(float)
+                desired = target_w.reindex(all_codes).fillna(0.0).astype(float)
+
+                m = pd.MultiIndex.from_product([[d], all_codes], names=["date", "code"])
+                px_d = px.reindex(m)
+                up_d = upper_s.reindex(m)
+                lo_d = lower_s.reindex(m)
+
+                ok_base = px_d.notna() & (px_d > 0)
+                buy_ok = ok_base & (up_d.isna() | (px_d < (up_d * (1.0 - 1e-12))))
+                sell_ok = ok_base & (lo_d.isna() | (px_d > (lo_d * (1.0 + 1e-12))))
+                buy_ok_s = pd.Series(buy_ok.to_numpy(dtype=bool), index=all_codes)
+                sell_ok_s = pd.Series(sell_ok.to_numpy(dtype=bool), index=all_codes)
+
+                cash_now = float(cash_w)
+                pos_after = prev_hold.copy()
+
+                need_sell = (pos_after - desired).clip(lower=0.0)
+                can_sell = (need_sell > 0) & sell_ok_s
+                if bool(can_sell.any()):
+                    sell_amt = float(need_sell.loc[can_sell].sum())
+                    pos_after.loc[can_sell] = desired.loc[can_sell]
+                    cash_now += sell_amt
+
+                need_buy = (desired - pos_after).clip(lower=0.0)
+                can_buy = (need_buy > 0) & buy_ok_s
+                if bool(can_buy.any()) and cash_now > 1e-12:
+                    need_total = float(need_buy.loc[can_buy].sum())
+                    if need_total > 1e-12:
+                        fill_ratio = float(min(1.0, cash_now / need_total))
+                        buy_inc = need_buy.loc[can_buy] * fill_ratio
+                        pos_after.loc[can_buy] = pos_after.loc[can_buy] + buy_inc
+                        cash_now -= float(buy_inc.sum())
+
+                cash_w = float(max(0.0, min(1.0, cash_now)))
+                hold_w = pos_after.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+                hold_w = hold_w[hold_w > 0].astype("float64")
+
+                delta = (hold_w.reindex(all_codes).fillna(0.0) - prev_hold).astype(float)
+                buy_amt = float(delta[delta > 0].sum()) if len(delta) else 0.0
+                sell_amt = float((-delta[delta < 0]).sum()) if len(delta) else 0.0
+                turnover = 0.5 * float(buy_amt + sell_amt)
+                fee_cost = float((buy_amt + sell_amt) * float(fee_rate))
+                slippage_cost = float((buy_amt + sell_amt) * float(slippage))
+
+            if len(hold_w) == 0:
+                port_r = 0.0
+            else:
+                codes = hold_w.index.astype("string").tolist()
+                try:
+                    m = pd.MultiIndex.from_product([[d], codes], names=["date", "code"])
+                    rr = rr_full.reindex(m).to_numpy(dtype=float)
+                    rr = np.where(np.isfinite(rr), rr, 0.0)
+                    ww = hold_w.reindex(pd.Index(codes, dtype="string")).to_numpy(dtype=float)
+                    ww = np.where(np.isfinite(ww), ww, 0.0)
+                    port_r = float(np.dot(ww, rr))
+                except Exception:
+                    port_r = 0.0
+
+        port_r_net = float(float(port_r) - float(fee_cost) - float(slippage_cost))
         b = float(bench_ret.loc[d]) if d in bench_ret.index else float("nan")
         ex = float(port_r_net - b) if np.isfinite(b) else float("nan")
         rows.append(
@@ -1048,6 +1134,14 @@ def _render_html_report(
     fig_rel = _encode_img_base64(paths.fig_relative_equity_png) if paths.fig_relative_equity_png.exists() else ""
     fig_dual = _encode_img_base64(paths.fig_dual_equity_png) if paths.fig_dual_equity_png.exists() else ""
     fig_rank = _encode_img_base64(paths.fig_rank_perf_png) if paths.fig_rank_perf_png.exists() else ""
+    dual_chart_html = ""
+    if fig_dual:
+        dual_chart_html = (
+            "<div class=\"chart-card\">"
+            "<h3>双基准资金曲线 (Dual Benchmark Equity)</h3>"
+            f"<img src=\"{fig_dual}\"/>"
+            "</div>"
+        )
     rank_chart_html = ""
     if fig_rank:
         rank_chart_html = (
@@ -1421,6 +1515,7 @@ def _render_html_report(
         <h3>相对净值曲线 (Relative Equity vs Benchmark)</h3>
         <img src="{fig_rel}"/>
     </div>
+    {dual_chart_html}
     <div class="chart-card">
         <h3>胜率分布 (Win Rate)</h3>
         <img src="{fig_winrate}"/>
@@ -1443,7 +1538,7 @@ def _render_html_report(
   {rank_perf_html}
 
   <div class="notes">
-    <strong>说明:</strong> 基准日收益：当 bench_method=self_eq 时，采用 price_data_path 中全样本等权 close-to-close 平均涨跌幅；否则采用 risk_data_path 指定指数的收盘价涨跌幅。策略收益采用 price_data_path 数据的 open-to-next-open 收益，并应用当日权重。净收益已扣除基于调仓权重的双边交易手续费。
+    <strong>说明:</strong> 主基准日收益固定采用 risk_data_path 中 399006 指数的 close-to-close 涨跌幅；双基准图中额外展示 self_eq（price_data 的全样本等权 close-to-close）用于衡量与股票池的差距。策略收益采用 price_data 的执行价到下一日执行价收益（由 quick_eval_price 控制），并应用当日权重；若 quick_eval_exec_model=limit_aware，则会按涨跌停/价格缺失对调仓进行简化撮合，可能产生现金仓位。净收益已扣除基于调仓权重估算的交易成本（手续费与滑点）。
   </div>
 </div>
 </body>
@@ -1470,23 +1565,27 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
     fee_rate = float(getattr(args, "quick_eval_fee_rate", getattr(args, "quick_eval_fee", 0.0)))
     slippage = float(getattr(args, "quick_eval_slippage", 0.0))
     initial_capital = float(getattr(args, "quick_eval_capital", 10_000_000.0))
+    price_method = str(getattr(args, "quick_eval_price", "open"))
+    exec_model = str(getattr(args, "quick_eval_exec_model", "limit_aware"))
 
     risk_data_path = str(getattr(args, "risk_data_path"))
-    risk_index_code = str(getattr(args, "risk_index_code"))
-    timing_method = str(getattr(args, "timing_method", "index_ma20"))
-    bench_method = "self_eq" if (timing_method == "self_eq_ma20" or str(risk_index_code).lower() in ("self_eq", "self_equal_weight", "self_equal")) else "index_close"
+    primary_bench_code = "399006"
+    pool_bench_code = "self_eq"
+    bench_method = "index_close"
 
     df_daily, metrics, bench_metrics = _compute_daily_from_weights(
         weights_dir=weights_dir,
         df_price=df_price,
         risk_data_path=risk_data_path,
-        risk_index_code=risk_index_code,
+        risk_index_code=primary_bench_code,
         bench_method=bench_method,
         enable_cache=enable_cache,
         paths=paths,
         risk_free_annual=risk_free,
         fee_rate=fee_rate,
         slippage=slippage,
+        price_method=price_method,
+        exec_model=exec_model,
     )
 
     if df_daily.empty:
@@ -1508,32 +1607,24 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
     d_min = daily.index.min().strftime("%Y%m%d")
     d_max = daily.index.max().strftime("%Y%m%d")
 
-    # 1. Load 399006
-    bench_399006_s = _load_index_close_series(risk_data_path, "399006", d_min, d_max)
-    if bench_399006_s.empty:
-         bench_399006_ret = pd.Series(0.0, index=daily.index)
-    else:
-         bench_399006_ret = bench_399006_s.pct_change().fillna(0.0).reindex(daily.index).fillna(0.0)
-    bench_399006_eq, _ = _compute_equity_and_metrics(bench_399006_ret, risk_free_annual=risk_free)
+    bench_399006_ret = bench.reindex(daily.index).fillna(0.0)
+    bench_399006_eq = bench_eq.reindex(daily.index).ffill()
 
-    # 2. Compute self_eq
     bench_self_ret_raw = _compute_self_eq_ret(df_price, d_min, d_max)
     bench_self_ret = bench_self_ret_raw.reindex(daily.index).fillna(0.0)
     bench_self_eq, _ = _compute_equity_and_metrics(bench_self_ret, risk_free_annual=risk_free)
 
-    # 3. Compute Win Rates
     win_rates_info = {}
     
     # vs 399006
-    if not bench_399006_s.empty:
-        daily_win_399006 = float((daily > bench_399006_ret).mean())
-        m_daily = _monthly_return_table(daily)["return"]
-        m_399006 = _monthly_return_table(bench_399006_ret)["return"]
-        if not m_daily.empty and not m_399006.empty:
-            m_win_399006 = float((m_daily > m_399006.reindex(m_daily.index).fillna(0.0)).mean())
-            win_rates_info["WinRate vs 399006"] = f"Daily={daily_win_399006:.1%}, Monthly={m_win_399006:.1%}"
-        else:
-            win_rates_info["WinRate vs 399006"] = f"Daily={daily_win_399006:.1%}"
+    daily_win_399006 = float((daily > bench_399006_ret).mean())
+    m_daily = _monthly_return_table(daily)["return"]
+    m_399006 = _monthly_return_table(bench_399006_ret)["return"]
+    if not m_daily.empty and not m_399006.empty:
+        m_win_399006 = float((m_daily > m_399006.reindex(m_daily.index).fillna(0.0)).mean())
+        win_rates_info["WinRate vs 399006"] = f"Daily={daily_win_399006:.1%}, Monthly={m_win_399006:.1%}"
+    else:
+        win_rates_info["WinRate vs 399006"] = f"Daily={daily_win_399006:.1%}"
 
     # vs self_eq
     daily_win_self = float((daily > bench_self_ret).mean())
@@ -1550,9 +1641,9 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
         dates=daily.index,
         equity=equity,
         bench1_equity=bench_399006_eq,
-        bench1_name="399006",
+        bench1_name=primary_bench_code,
         bench2_equity=bench_self_eq,
-        bench2_name="self_eq",
+        bench2_name=pool_bench_code,
         out_path=paths.fig_dual_equity_png,
         win_rates=win_rates_info
     )
@@ -1573,6 +1664,7 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
         df_price=df_price,
         top_n=rank_top_n,
         risk_free_annual=risk_free,
+        price_method=price_method,
     )
     if df_rank is not None and not df_rank.empty:
         _plot_rank_performance(df_rank, paths.fig_rank_perf_png)
@@ -1651,7 +1743,9 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
     source_info = {
         "权重目录 (Weights Dir)": str(weights_dir),
         "价格数据 (Price Data)": str(getattr(df_price, "_source_path", "InMemory")),
-        "风控基准 (Risk Data)": f"{risk_data_path} (Index: {risk_index_code}, BenchMethod: {bench_method})",
+        "风控基准 (Risk Data)": f"{risk_data_path} (PrimaryIndex: {primary_bench_code}, PoolBench: {pool_bench_code}, BenchMethod: {bench_method})",
+        "执行价格 (Exec Price)": str(price_method),
+        "撮合模型 (Exec Model)": str(exec_model),
     }
 
     _render_html_report(

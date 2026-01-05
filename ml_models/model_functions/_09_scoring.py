@@ -140,8 +140,12 @@ def process_single_day_score(
         try:
             valid_codes = daily_result["code"].unique()
             price_today = df_price.loc[idx[target_date, valid_codes], :]
-            cond_active = price_today["open"].notna() & (price_today["open"] > 0)
-            if "upper_limit" in price_today.columns:
+            use_open_filter = bool(getattr(args, "use_current_day_open_filter", False))
+            if use_open_filter and "open" in price_today.columns:
+                cond_active = price_today["open"].notna() & (price_today["open"] > 0)
+            else:
+                cond_active = True
+            if use_open_filter and ("upper_limit" in price_today.columns) and ("open" in price_today.columns):
                 cond_no_limit_up = price_today["open"] < price_today["upper_limit"]
             else:
                 cond_no_limit_up = True

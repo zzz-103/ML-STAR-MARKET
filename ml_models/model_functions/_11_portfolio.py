@@ -589,21 +589,28 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             price_today = df_price.loc[idx[target_date, list(buyable.index)], :]
             if len(price_today) > 0:
                 pt = price_today.reset_index(level="date", drop=True)
+                use_open_filter = bool(getattr(args, "use_current_day_open_filter", False))
                 o = pd.to_numeric(pt.get("open", np.nan), errors="coerce")
-                cond_open = o.notna() & (o > 0)
-                tv = pt.get("turnover_prev", None)
-                if tv is None:
-                    tv = pt.get("turnover", None)
-                if tv is not None:
-                    tv = pd.to_numeric(tv, errors="coerce")
-                    cond_liquid = tv > float(getattr(args, "min_turnover", 15_000_000.0))
+                cond_open = (o.notna() & (o > 0)) if use_open_filter else pd.Series(True, index=pt.index)
+                tv_prev = pt.get("turnover_prev", None)
+                if tv_prev is not None:
+                    tv_prev = pd.to_numeric(tv_prev, errors="coerce")
+                    cond_liquid = tv_prev > float(getattr(args, "min_turnover", 15_000_000.0))
                 else:
-                    cond_liquid = pd.Series(True, index=pt.index)
+                    if use_open_filter:
+                        tv = pt.get("turnover", None)
+                        if tv is not None:
+                            tv = pd.to_numeric(tv, errors="coerce")
+                            cond_liquid = tv > float(getattr(args, "min_turnover", 15_000_000.0))
+                        else:
+                            cond_liquid = pd.Series(True, index=pt.index)
+                    else:
+                        cond_liquid = pd.Series(True, index=pt.index)
                 u = pd.to_numeric(pt.get("upper_limit", np.nan), errors="coerce")
                 l = pd.to_numeric(pt.get("lower_limit", np.nan), errors="coerce")
                 has_u = u.notna() & (u > 0)
                 has_l = l.notna() & (l > 0)
-                lim = (has_u & (o >= (u * (1 - 1e-12)))) | (has_l & (o <= (l * (1 + 1e-12))))
+                lim = ((has_u & (o >= (u * (1 - 1e-12)))) | (has_l & (o <= (l * (1 + 1e-12))))) if use_open_filter else False
                 trad = (cond_open & cond_liquid).rename("tradable")
                 buy = (trad & (~lim)).rename("buyable")
                 buyable.loc[buy.index.astype("string")] = buy.to_numpy(dtype=bool)
