@@ -204,7 +204,7 @@ DEFAULT_KEEP_FACTORS = [
     "f_val_vol_spread",
     #"f_rd_intensity",
     #"f_rd_cap_ratio",
-    #"f_price_to_rd",
+    "f_price_to_rd",
 ]
 
 DEFAULT_MONOTONE_CONSTRAINTS = {
