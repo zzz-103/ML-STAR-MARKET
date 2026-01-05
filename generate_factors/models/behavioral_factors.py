@@ -40,6 +40,43 @@ def _rolling_trend_r2(series: pd.Series, window: int) -> pd.Series:
     return pd.Series(out, index=series.index)
 
 
+def _rolling_corr_r2(x_series: pd.Series, y_series: pd.Series, window: int) -> pd.Series:
+    x = pd.to_numeric(x_series, errors="coerce").to_numpy(dtype="float64", copy=True)
+    y = pd.to_numeric(y_series, errors="coerce").to_numpy(dtype="float64", copy=True)
+    n = int(x.shape[0])
+    out = np.full(n, np.nan, dtype="float64")
+    w = int(window)
+    if w <= 1 or n < w:
+        return pd.Series(out, index=x_series.index)
+
+    finite = np.isfinite(x) & np.isfinite(y)
+    x0 = np.where(finite, x, 0.0)
+    y0 = np.where(finite, y, 0.0)
+    ones = np.ones(w, dtype="float64")
+
+    sum_x = np.convolve(x0, ones, mode="valid")
+    sum_y = np.convolve(y0, ones, mode="valid")
+    sum_x2 = np.convolve(x0 * x0, ones, mode="valid")
+    sum_y2 = np.convolve(y0 * y0, ones, mode="valid")
+    sum_xy = np.convolve(x0 * y0, ones, mode="valid")
+
+    count = np.convolve(finite.astype("float64"), ones, mode="valid")
+    valid = count == float(w)
+
+    cov = sum_xy - (sum_x * sum_y) / float(w)
+    var_x = sum_x2 - (sum_x * sum_x) / float(w)
+    var_y = sum_y2 - (sum_y * sum_y) / float(w)
+    denom = var_x * var_y
+
+    r2 = np.full_like(sum_x, np.nan, dtype="float64")
+    good = valid & np.isfinite(denom) & (denom > 0.0)
+    r2[good] = (cov[good] * cov[good]) / denom[good]
+    r2 = np.clip(r2, 0.0, 1.0, out=r2, where=np.isfinite(r2))
+
+    out[w - 1 :] = r2
+    return pd.Series(out, index=x_series.index)
+
+
 def run(df: pd.DataFrame) -> pd.DataFrame:
     output = pd.DataFrame(index=df.index)
 
@@ -49,6 +86,14 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
         else:
             s = pd.Series(np.nan, index=df.index)
         return pd.to_numeric(s, errors="coerce")
+
+    def _num_series_any(cols: list[str]) -> pd.Series:
+        for c in cols:
+            if c in df.columns:
+                s = pd.to_numeric(df[c], errors="coerce")
+                if not s.isna().all():
+                    return s
+        return pd.Series(np.nan, index=df.index, dtype="float64")
 
     open_p = _num_series("open")
     high = _num_series("high")
@@ -214,5 +259,34 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     output["f_turn_growth_20_40"] = (turn_ma20 / (turn_ma40 + 1e-6)) - 1.0
 
     output["f_abnormal_turn_20"] = (turn_rate - turn_ma20) / (turn_std20 + 1e-6)
+
+    vol_60 = (
+        ret_1.groupby(level="code")
+        .rolling(60, min_periods=60)
+        .std()
+        .reset_index(level=0, drop=True)
+    )
+
+    pb = _num_series_any(["pb", "PB"])
+    pb_rank = pb.groupby(level="date", sort=False).rank(pct=True)
+
+    dates = df.index.get_level_values("date")
+    market_ret_by_date = ret_1.groupby(level="date", sort=False).mean()
+    market_ret_aligned = pd.Series(market_ret_by_date.reindex(dates).to_numpy(), index=df.index)
+    r2_mkt_60 = (
+        pd.DataFrame({"x": ret_1, "m": market_ret_aligned}, index=df.index)
+        .groupby(level="code", sort=False)
+        .apply(lambda g: _rolling_corr_r2(g["x"], g["m"], 60))
+        .reset_index(level=0, drop=True)
+    )
+    idio_60 = 1.0 - r2_mkt_60.clip(lower=0.0, upper=1.0)
+    idio_rank = idio_60.groupby(level="date", sort=False).rank(pct=True)
+    output["f_tech_premium"] = pb_rank * idio_rank
+
+    pe_ttm = _num_series_any(["pe_ttm", "PE_ttm", "pe", "PE"])
+    ep = (1.0 / pe_ttm.replace(0.0, np.nan)).where(pe_ttm > 0.0)
+    ep_rank = ep.groupby(level="date", sort=False).rank(pct=True).fillna(0.0)
+    vol_rank_60 = vol_60.groupby(level="date", sort=False).rank(pct=True)
+    output["f_val_vol_spread"] = ep_rank - vol_rank_60
 
     return output

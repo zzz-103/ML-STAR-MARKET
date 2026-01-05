@@ -22,6 +22,9 @@ CLEANED_DATA_PATH = os.path.join(CLEANED_DATA_DIR, CLEANED_FILE_NAME)
 _PREFERRED_CLEANED_DATA_PATH = str(PROJECT_ROOT / "pre_data" / "cleaned_stock_data_300_688_with_idxstk_with_industry.parquet")
 if os.path.exists(_PREFERRED_CLEANED_DATA_PATH):
     CLEANED_DATA_PATH = _PREFERRED_CLEANED_DATA_PATH
+_PREFERRED_CLEANED_DATA_PATH_RD = str(PROJECT_ROOT / "pre_data" / "cleaned_stock_data_300_688_with_idxstk_with_industry_with_rd.parquet")
+if os.path.exists(_PREFERRED_CLEANED_DATA_PATH_RD):
+    CLEANED_DATA_PATH = _PREFERRED_CLEANED_DATA_PATH_RD
 
 # 3. 因子输出根目录
 OUTPUT_ROOT = str(PROJECT_ROOT / "factors_data")
@@ -455,6 +458,54 @@ def get_data():
     """
     优先读取缓存 Parquet，不存在则清洗 CSV
     """
+    def _enrich_from_raw_if_missing(df_in: pd.DataFrame, needed_cols: list[str]) -> pd.DataFrame:
+        missing_or_empty: list[str] = []
+        for c in needed_cols:
+            if c not in df_in.columns:
+                missing_or_empty.append(c)
+                continue
+            try:
+                if not df_in[c].notna().any():
+                    missing_or_empty.append(c)
+            except Exception:
+                missing_or_empty.append(c)
+
+        if not missing_or_empty:
+            return df_in
+        if not os.path.exists(RAW_INPUT_PATH):
+            return df_in
+
+        print(f"[{datetime.now().time()}] ⚠️ 缓存缺少/为空列 {missing_or_empty}，尝试从原始 CSV 补齐: {RAW_INPUT_PATH}")
+        usecols = ["date", "code"] + missing_or_empty
+        try:
+            df_raw = pd.read_csv(RAW_INPUT_PATH, usecols=usecols, dtype={"code": str})
+        except Exception as e:
+            print(f"[{datetime.now().time()}] ⚠️ 原始 CSV 读取失败，跳过补齐: {e}")
+            return df_in
+
+        if "date" in df_raw.columns:
+            df_raw["date"] = pd.to_datetime(df_raw["date"], format="%Y%m%d", errors="coerce")
+        df_raw["code"] = df_raw["code"].fillna("").astype(str).str.upper()
+        split_data = df_raw["code"].str.split(".", n=1, expand=True)
+        if split_data.shape[1] == 1:
+            split_data[1] = ""
+        code_num = split_data[0]
+        suffix = split_data[1]
+        mask_sh = code_num.str.startswith(("60", "68"))
+        mask_cy = code_num.str.startswith("30")
+        mask_sz_main = (code_num.str.startswith("00")) & (suffix.str.contains("SZ", na=False))
+        final_mask = mask_sh | mask_cy | mask_sz_main
+        df_raw = df_raw.loc[final_mask, ["date"] + missing_or_empty].copy()
+        df_raw.insert(1, "code", code_num.loc[final_mask].astype(str).to_numpy())
+        df_raw = df_raw.dropna(subset=["date", "code"]).set_index(["date", "code"]).sort_index()
+        if df_raw.index.duplicated().any():
+            df_raw = df_raw[~df_raw.index.duplicated(keep="first")]
+        for c in missing_or_empty:
+            df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce")
+
+        out = df_in.join(df_raw[missing_or_empty], how="left")
+        return out
+
     if not os.path.exists(CLEANED_DATA_DIR):
         os.makedirs(CLEANED_DATA_DIR)
 
@@ -465,7 +516,13 @@ def get_data():
             df = pd.read_parquet(CLEANED_DATA_PATH)
             if not isinstance(df.index, pd.MultiIndex) or set(df.index.names) != {"date", "code"}:
                 raise ValueError(f"缓存数据索引必须包含 date/code: {CLEANED_DATA_PATH}")
-            return df.sort_index()
+            df = df.sort_index()
+            df = _enrich_from_raw_if_missing(df, ["CirculatedMarketValue", "RDSpendSum", "RDSpendSumRatio", "RDInvestRatio"])
+            try:
+                df.to_parquet(CLEANED_DATA_PATH)
+            except Exception:
+                pass
+            return df
         except Exception as e:
             print(f"❌ 缓存损坏 ({e})，重新清洗。")
 

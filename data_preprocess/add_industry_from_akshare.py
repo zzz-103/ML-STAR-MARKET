@@ -108,12 +108,15 @@ def add_industry_column(
     os.makedirs(out_dir, exist_ok=True)
 
     out_suffix = str(Path(output_path).suffix).lower()
+    tmp_path = str(output_path) + ".tmp"
     if out_suffix == ".csv":
-        df.to_csv(output_path, index=False)
+        df.to_csv(tmp_path, index=False)
     else:
         if had_multiindex and index_names:
             df = df.reset_index().set_index(index_names).sort_index()
-        df.to_parquet(output_path)
+        df.to_parquet(tmp_path)
+
+    os.replace(tmp_path, output_path)
 
     return total_count, missing_count
 

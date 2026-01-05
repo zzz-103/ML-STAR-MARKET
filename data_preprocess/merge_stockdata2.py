@@ -820,10 +820,210 @@ def load_base_merged_as_df(
         df = df[df["date"] <= end_dt]
 
     for c in df.columns:
-        if c in ("date", "code"):
+        if c in ("date", "code", "EndDate"):
             continue
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
+
+
+def _infer_exchange_suffix(code6: str) -> str:
+    s = "" if code6 is None else str(code6).strip().strip('"')
+    if len(s) != 6 or (not s.isdigit()):
+        return ""
+    if s.startswith("6"):
+        return ".SSE"
+    if s.startswith(("0", "2", "3")):
+        return ".SZSE"
+    return ""
+
+
+def load_pt_lcrdspending_asof_df(
+    csv_path: str,
+    lag_months: int = 4,
+) -> pd.DataFrame:
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"csv not found: {csv_path}")
+    df = pd.read_csv(csv_path, dtype=str)
+    df = df.rename(columns={c: _norm_csv_field_name(c) for c in df.columns})
+    if "Symbol" not in df.columns or "EndDate" not in df.columns:
+        raise ValueError(f"PT_LCRDSPENDING csv must include Symbol and EndDate: {csv_path}")
+
+    rd_cols = [
+        "EndDate",
+        "Source",
+        "StateTypeCode",
+        "RDPersonRatio",
+        "RDSpendSum",
+        "RDSpendSumRatio",
+        "RDExpenses",
+        "RDInvest",
+        "RDInvestRatio",
+        "RDInvestNetprofitRatio",
+    ]
+    keep_cols = [c for c in rd_cols if c in df.columns]
+
+    df["code6"] = df["Symbol"].map(_normalize_code)
+    df["rd_code"] = df["code6"].map(lambda x: f"{x}{_infer_exchange_suffix(x)}" if _infer_exchange_suffix(x) else x)
+    df["end_date_ts"] = df["EndDate"].map(_parse_yyyy_mm_dd)
+    df["available_date"] = df["end_date_ts"] + pd.DateOffset(months=int(lag_months)) + pd.Timedelta(days=1)
+    df = df.dropna(subset=["rd_code", "available_date"])
+
+    if "EndDate" in df.columns:
+        df["EndDate"] = df["end_date_ts"].dt.strftime("%Y-%m-%d")
+
+    df = df[["rd_code", "available_date"] + keep_cols].copy()
+    df = df.sort_values(["rd_code", "available_date"])
+    df = df.drop_duplicates(subset=["rd_code", "available_date"], keep="last")
+    return df
+
+
+def merge_base_csv_with_pt_lcrdspending(
+    base_csv_path: str,
+    rd_csv_path: str,
+    output_csv_path: str,
+    lag_months: int = 4,
+) -> None:
+    if not os.path.exists(base_csv_path):
+        raise FileNotFoundError(f"base csv not found: {base_csv_path}")
+
+    base = pd.read_csv(base_csv_path, dtype=str)
+    if "date" not in base.columns or "code" not in base.columns:
+        raise ValueError(f"base csv must include date and code columns: {base_csv_path}")
+
+    base_cols = list(base.columns)
+    base["_row_id"] = range(len(base))
+    base["date_ts"] = pd.to_datetime(base["date"].astype(str).str.strip().str.strip('"'), format="%Y%m%d", errors="coerce")
+    base["code_full"] = base["code"].astype(str).str.strip().str.strip('"')
+
+    rd = load_pt_lcrdspending_asof_df(csv_path=rd_csv_path, lag_months=int(lag_months))
+    new_cols = [c for c in rd.columns if c not in ("rd_code", "available_date")]
+    overlap = [c for c in new_cols if c in base_cols]
+    if overlap:
+        raise ValueError(f"rd columns already exist in base csv: {overlap}")
+
+    mask_valid = base["date_ts"].notna() & base["code_full"].notna()
+    base_valid = base.loc[mask_valid, :].copy()
+    base_invalid = base.loc[~mask_valid, :].copy()
+
+    base_valid = base_valid.sort_values(["date_ts", "code_full"])
+    rd = rd.sort_values(["available_date", "rd_code"])
+
+    merged_valid = pd.merge_asof(
+        base_valid,
+        rd,
+        left_on="date_ts",
+        right_on="available_date",
+        left_by="code_full",
+        right_by="rd_code",
+        direction="backward",
+        allow_exact_matches=True,
+    )
+    merged = pd.concat([merged_valid, base_invalid], axis=0, ignore_index=True)
+
+    numeric_cols = [c for c in new_cols if c != "EndDate"]
+    for c in numeric_cols:
+        if c not in merged.columns:
+            continue
+        s = merged[c]
+        is_missing = s.isna() | s.astype(str).str.strip().isin(["", "nan", "none", "NaN", "None"])
+        merged.loc[is_missing, c] = "0"
+
+    out_cols = base_cols + [c for c in new_cols if c not in base_cols]
+    merged = merged.sort_values("_row_id")
+    merged = merged[out_cols]
+
+    os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
+    tmp_path = output_csv_path + ".tmp"
+    merged.to_csv(tmp_path, index=False)
+    os.replace(tmp_path, output_csv_path)
+
+
+def _expand_csv_files(values: Sequence[str]) -> List[str]:
+    paths = _expand_paths(values)
+    expanded: List[str] = []
+    for p in paths:
+        if os.path.isdir(p):
+            matches = glob.glob(os.path.join(p, "*.csv"))
+            matches.sort()
+            expanded.extend(matches)
+        else:
+            expanded.append(p)
+
+    uniq: List[str] = []
+    seen = set()
+    for p in expanded:
+        ap = os.path.abspath(p)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        uniq.append(ap)
+    return uniq
+
+
+def load_circulated_market_value_as_df(
+    csv_inputs: Sequence[str],
+) -> pd.DataFrame:
+    paths = _expand_csv_files(csv_inputs)
+    if not paths:
+        return pd.DataFrame(columns=["date", "code", "CirculatedMarketValue"])
+
+    frames: List[pd.DataFrame] = []
+    use_cols = ["TradingDate", "Symbol", "CirculatedMarketValue"]
+
+    for pth in paths:
+        if not os.path.exists(pth):
+            continue
+        for chunk in pd.read_csv(pth, dtype=str, chunksize=200_000):
+            chunk = chunk.rename(columns={c: _norm_csv_field_name(c) for c in chunk.columns})
+            if any(c not in chunk.columns for c in use_cols):
+                break
+
+            out = chunk[use_cols].copy()
+            out["code6"] = out["Symbol"].map(_normalize_code)
+            out["code"] = out["code6"].map(lambda x: f"{x}{_infer_exchange_suffix(x)}" if _infer_exchange_suffix(x) else x)
+            dt = pd.to_datetime(out["TradingDate"].astype(str).str.strip().str.strip('"').str.slice(0, 10), format="%Y-%m-%d", errors="coerce")
+            out["date"] = dt.dt.strftime("%Y%m%d")
+            out["CirculatedMarketValue"] = out["CirculatedMarketValue"].astype(str).str.strip().str.strip('"')
+            out = out.dropna(subset=["date", "code"])
+            out = out.loc[out["date"].astype(str).str.len() == 8, ["date", "code", "CirculatedMarketValue"]].copy()
+            frames.append(out)
+
+    if not frames:
+        return pd.DataFrame(columns=["date", "code", "CirculatedMarketValue"])
+
+    df = pd.concat(frames, axis=0, ignore_index=True)
+    df = df.dropna(subset=["date", "code"])
+    df = df.drop_duplicates(subset=["date", "code"], keep="last")
+    return df
+
+
+def merge_base_csv_with_circulated_market_value(
+    base_csv_path: str,
+    cmv_csv_inputs: Sequence[str],
+    output_csv_path: str,
+) -> None:
+    if not os.path.exists(base_csv_path):
+        raise FileNotFoundError(f"base csv not found: {base_csv_path}")
+
+    base = pd.read_csv(base_csv_path, dtype=str, low_memory=False)
+    if "date" not in base.columns or "code" not in base.columns:
+        raise ValueError(f"base csv must include date and code columns: {base_csv_path}")
+
+    base_cols = list(base.columns)
+    if "CirculatedMarketValue" in base_cols:
+        raise ValueError("CirculatedMarketValue already exists in base csv")
+
+    cmv = load_circulated_market_value_as_df(csv_inputs=cmv_csv_inputs)
+    merged = base.merge(cmv, on=["date", "code"], how="left")
+
+    s = merged["CirculatedMarketValue"]
+    is_missing = s.isna() | s.astype(str).str.strip().isin(["", "nan", "none", "NaN", "None"])
+    merged.loc[is_missing, "CirculatedMarketValue"] = "0"
+
+    os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
+    tmp_path = output_csv_path + ".tmp"
+    merged.to_csv(tmp_path, index=False)
+    os.replace(tmp_path, output_csv_path)
 
 
 def merge_base_with_idxstk_to_parquet(
@@ -870,6 +1070,10 @@ def merge_base_with_idxstk_to_parquet(
     val_idx = val_df.set_index(["date", "code"]).sort_index()
     sc_idx = sc_df.set_index(["date", "code"]).sort_index()
 
+    if len(val_idx.columns):
+        overlap = [c for c in val_idx.columns if c in base_idx.columns]
+        if overlap:
+            val_idx = val_idx.drop(columns=overlap)
     merged = base_idx.join(idx_idx, how="left").join(val_idx, how="left").join(sc_idx, how="left")
     base_cols = [
         "preclose",
@@ -890,6 +1094,20 @@ def merge_base_with_idxstk_to_parquet(
             keep_cols.append(c)
     for c in ("CirculatedMarketValue", "Turnover"):
         if c in merged.columns:
+            keep_cols.append(c)
+    for c in (
+        "EndDate",
+        "Source",
+        "StateTypeCode",
+        "RDPersonRatio",
+        "RDSpendSum",
+        "RDSpendSumRatio",
+        "RDExpenses",
+        "RDInvest",
+        "RDInvestRatio",
+        "RDInvestNetprofitRatio",
+    ):
+        if c in merged.columns and c not in keep_cols:
             keep_cols.append(c)
     for c in sc_idx.columns:
         if c in merged.columns and c not in keep_cols:
@@ -1007,10 +1225,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stock-pool-prefixes", default="300,688")
     parser.add_argument("--merge-idxstk-to-parquet", action="store_true", default=False)
     parser.add_argument("--merge-shuangchuang-into-parquet", action="store_true", default=False)
+    parser.add_argument("--merge-rdspending-into-csv", action="store_true", default=False)
+    parser.add_argument("--merge-cmv-into-csv", action="store_true", default=False)
     parser.add_argument(
         "--base-csv-path",
         default="/Users/zhuzhuxia/Documents/SZU_w4/pre_data/merged_20200101_20241231.csv",
     )
+    parser.add_argument(
+        "--rdspending-csv-path",
+        default="/Users/zhuzhuxia/Documents/SZU_w4/pre_data/investment_in_research/PT_LCRDSPENDING.csv",
+    )
+    parser.add_argument("--rdspending-lag-months", type=int, default=4)
+    parser.add_argument("--rdspending-output-csv-path", default=None)
+    parser.add_argument(
+        "--cmv-inputs",
+        nargs="*",
+        default=[
+            "/Users/zhuzhuxia/Documents/SZU_w4/pre_data/CirculatedMarketValue_2021-2022",
+            "/Users/zhuzhuxia/Documents/SZU_w4/pre_data/CirculatedMarketValue_2023-2024",
+        ],
+    )
+    parser.add_argument("--cmv-output-csv-path", default=None)
     parser.add_argument(
         "--idxstk-csvs",
         nargs="*",
@@ -1128,6 +1363,31 @@ def main() -> None:
             end_date=str(args.merge_end_date) if args.merge_end_date else None,
             compression=str(args.parquet_compression_merge),
         )
+        return
+
+    if bool(args.merge_rdspending_into_csv):
+        out_path = str(args.rdspending_output_csv_path) if args.rdspending_output_csv_path else str(args.base_csv_path)
+        merge_base_csv_with_pt_lcrdspending(
+            base_csv_path=str(args.base_csv_path),
+            rd_csv_path=str(args.rdspending_csv_path),
+            output_csv_path=out_path,
+            lag_months=int(args.rdspending_lag_months),
+        )
+        print(f"base_csv_path={args.base_csv_path}")
+        print(f"rdspending_csv_path={args.rdspending_csv_path}")
+        print(f"output_csv_path={out_path}")
+        return
+
+    if bool(args.merge_cmv_into_csv):
+        out_path = str(args.cmv_output_csv_path) if args.cmv_output_csv_path else str(args.base_csv_path)
+        merge_base_csv_with_circulated_market_value(
+            base_csv_path=str(args.base_csv_path),
+            cmv_csv_inputs=list(args.cmv_inputs or []),
+            output_csv_path=out_path,
+        )
+        print(f"base_csv_path={args.base_csv_path}")
+        print(f"cmv_inputs={len(list(args.cmv_inputs or []))}")
+        print(f"output_csv_path={out_path}")
         return
 
     output_name = args.output_name or f"merged_{args.start_date}_{args.end_date}.csv"

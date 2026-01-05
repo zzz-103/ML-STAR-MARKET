@@ -91,6 +91,7 @@ def _build_dataset_cache_key(args, *, factor_path: str, price_path: str, factor_
         keep_factors_csv=getattr(args, "keep_factors", None),
     )
     payload = {
+        "cache_schema_version": "v2_float32_features",
         "factor_path": os.path.abspath(factor_path),
         "factor_mtime_ns": int(getattr(fp_stat, "st_mtime_ns", int(fp_stat.st_mtime * 1e9))),
         "factor_size": int(fp_stat.st_size),
@@ -211,6 +212,10 @@ def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.Data
 
     logger.info("步骤: 合并特征与标签 (Inner Join)")
     df_ml = df_factors_shifted.join(df_target, how="inner")
+    df_ml = df_ml.sort_index()
+    feature_cols = [c for c in df_ml.columns if c != "ret_next"]
+    if feature_cols:
+        df_ml[feature_cols] = df_ml[feature_cols].astype("float32")
     if bool(getattr(args, "dropna_features", False)):
         df_ml = df_ml.dropna()
     logger.info("数据集样本数=%d", int(len(df_ml)))

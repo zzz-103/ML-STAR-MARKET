@@ -41,7 +41,7 @@ def compute_factor_importance(
         train_start_date = train_floor
 
     idx = pd.IndexSlice
-    train_data = df_ml.loc[idx[train_start_date:train_end_date, :], :].sort_index()
+    train_data = df_ml.loc[idx[train_start_date:train_end_date, :], :]
     if len(train_data) < 1000:
         return None
 

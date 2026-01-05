@@ -200,6 +200,11 @@ DEFAULT_KEEP_FACTORS = [
     "f_turn_stability_20",
     "f_turn_growth_20_40",
     "f_abnormal_turn_20",
+    "f_tech_premium",
+    "f_val_vol_spread",
+    #"f_rd_intensity",
+    #"f_rd_cap_ratio",
+    #"f_price_to_rd",
 ]
 
 DEFAULT_MONOTONE_CONSTRAINTS = {
@@ -222,4 +227,9 @@ DEFAULT_MONOTONE_CONSTRAINTS = {
     "f_turn_growth_20_40": 0,
     "f_abnormal_turn_20": 0,
     "f_turn_stability_20": 0,
+    "f_tech_premium": -1,
+    "f_val_vol_spread": 1,
+    "f_rd_intensity": 1,
+    "f_rd_cap_ratio": -1,
+    "f_price_to_rd": -1,
 }

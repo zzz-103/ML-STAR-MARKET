@@ -30,7 +30,7 @@ from ml_models.model_functions._04_feature_engineering import (
     build_monotone_constraints,
 )
 from ml_models.model_functions._06_data_preprocessing import prepare_dataset
-from ml_models.model_functions._09_scoring import init_scoring_worker, process_single_day_score
+from ml_models.model_functions._09_scoring import init_scoring_worker, process_score_chunk
 from ml_models.model_functions._11_portfolio import generate_positions_with_buffer
 from ml_models.model_functions._12_factor_importance import compute_factor_importance, save_factor_importance
 from ml_models.model_functions._13_diagnosis import diagnose_factors
@@ -348,11 +348,20 @@ def run(argv: list[str] | None = None) -> None:
         return
     logger.info("预测区间 %s~%s 总天数=%d", predict_dates[0].strftime("%Y%m%d"), predict_dates[-1].strftime("%Y%m%d"), int(len(predict_dates)))
 
-    tasks: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp]] = []
+    rebalance_period = int(getattr(args, "rebalance_period", cfg.DEFAULT_PORTFOLIO["rebalance_period"]))
+    train_stride = max(1, int(rebalance_period))
+    logger.info("打分优化: 每%d天训练一次，并复用模型预测中间交易日", int(train_stride))
+
+    tasks: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, list[pd.Timestamp]]] = []
     all_dates_index = pd.Index(all_dates)
     n_skip = 0
-    for target_date in predict_dates:
-        pos = int(all_dates_index.get_loc(target_date))
+    predict_list = list(predict_dates)
+    for i in range(0, len(predict_list), train_stride):
+        chunk = predict_list[i : i + train_stride]
+        if not chunk:
+            continue
+        anchor_date = chunk[0]
+        pos = int(all_dates_index.get_loc(anchor_date))
         if pos < train_window + train_gap - 1:
             n_skip += 1
             continue
@@ -363,14 +372,14 @@ def run(argv: list[str] | None = None) -> None:
         if train_start_date > train_end_date:
             n_skip += 1
             continue
-        if not (train_end_date < target_date):
+        if not (train_end_date < anchor_date):
             n_skip += 1
             continue
-        tasks.append((target_date, train_start_date, train_end_date))
+        tasks.append((anchor_date, train_start_date, train_end_date, chunk))
     if n_skip:
-        logger.info("跳过任务数=%d (数据不足或日期无效)", int(n_skip))
+        logger.info("跳过训练任务数=%d (数据不足或日期无效)", int(n_skip))
     if len(tasks) == 0:
-        logger.info("任务列表为空，跳过运行")
+        logger.info("训练任务列表为空，跳过运行")
         return
 
     log_section(logger, "模型训练与打分 (Scoring)")
@@ -386,10 +395,11 @@ def run(argv: list[str] | None = None) -> None:
     ) as executor:
         futures = [
             executor.submit(
-                process_single_day_score,
+                process_score_chunk,
                 t[0],
                 t[1],
                 t[2],
+                t[3],
             )
             for t in tasks
         ]
@@ -409,8 +419,11 @@ def run(argv: list[str] | None = None) -> None:
                 if len(err_samples) < 5:
                     err_samples.append(r)
                 continue
-            n_ok += 1
-    logger.info("打分汇总 成功=%d 空结果=%d 错误=%d", int(n_ok), int(n_none), int(n_err))
+            if isinstance(r, (list, tuple)):
+                n_ok += int(len(r))
+            else:
+                n_ok += 1
+    logger.info("打分汇总 成功天数=%d 空结果=%d 错误=%d", int(n_ok), int(n_none), int(n_err))
     for s in err_samples:
         logger.info("打分错误示例 %s", s)
     extension_hook("after_scoring", args=args, df_ml=df_ml, df_price=df_price, logger=logger, temp_dir=temp_dir)
@@ -428,7 +441,8 @@ def run(argv: list[str] | None = None) -> None:
         pass
 
     log_section(logger, "因子重要性 (FactorImportance)")
-    res = compute_factor_importance(df_ml, all_dates, predict_dates, final_features, args)
+    importance_dates = pd.Index([t[0] for t in tasks])
+    res = compute_factor_importance(df_ml, all_dates, importance_dates, final_features, args)
     df_imp: pd.DataFrame | None = None
     meta: dict | None = None
     if res is not None:

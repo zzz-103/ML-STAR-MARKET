@@ -15,8 +15,8 @@
 
 """
 python ".../generate_factors/main.py" 
---summary-only \
-  --summary-start-date 20230101 
+  --summary-only \
+  --summary-start-date 20230101 \
   --summary-end-date 20241231
   
 """
