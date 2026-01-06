@@ -47,7 +47,7 @@ DEFAULT_TRAINING = {
     "dropna_features": False,
     "sample_weight_mode": "time_decay_exp",
     "decay_anchor_days": 30,
-    "decay_half_life_days": 60,
+    "decay_half_life_days": 40,
     "decay_min_weight": 0.1,
 }
 
@@ -67,7 +67,7 @@ DEFAULT_MODEL = {
 
 DEFAULT_PORTFOLIO = {
     "top_k": 20,
-    "buffer_k": 30,
+    "buffer_k": 40,
     "rebalance_period": 5,
     "rebalance_turnover_cap": 0.90,
     "smooth_window": 5,
@@ -75,7 +75,7 @@ DEFAULT_PORTFOLIO = {
     "emergency_exit_rank": 50,
     "keep_missing_positions": True,
     "band_threshold": 0.001,
-    "max_w": 0.06,
+    "max_w": 0.08,
     "min_weight": 0.0005,
     "non_rebalance_action": "empty",
     "limit_policy": "freeze",
@@ -91,7 +91,7 @@ DEFAULT_PORTFOLIO = {
     "industry_ma_window": 20,
     "industry_ma_riskoff_buffer": 0.01,
     "industry_riskoff_policy": "ban_new",
-    "industry_max_weight": 0.30,
+    "industry_max_weight": 0.50,
     "industry_riskoff_weight_scale": 0.5,
     "industry_fast_reversal_enable": True,
     "industry_fast_reversal_ret_threshold": 0.03,
@@ -105,13 +105,13 @@ DEFAULT_PORTFOLIO = {
 }
 
 DEFAULT_TIMING = {
-    "timing_method": "self_eq_ma20",
+    "timing_method": "index_ma20",
     "timing_threshold": 0.0,
     "timing_hysteresis": 0.005,
     "timing_enter_threshold": None,
     "timing_exit_threshold": None,
     "timing_bad_exposure": 0.4,
-    "risk_index_code": "self_eq",
+    "risk_index_code": "399006",
     "risk_index_code_300": "399006",
     "risk_index_code_688": "000688",
     "risk_ma_window": 20,
