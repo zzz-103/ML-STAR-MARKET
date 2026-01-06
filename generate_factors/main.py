@@ -46,7 +46,7 @@ if str(PROJECT_ROOT) not in sys.path:
 SUMMARY_PATH = str(Path(__file__).resolve().parent / "factors_summary.txt")
 QUALITY_START = "20230101"
 QUALITY_END = "20241231"
-MASKED_FACTORS = {"ff_mkt", "ff_hml", "ff_smb", "ff_smb_cov_60"}
+MASKED_FACTORS = {"ff_mkt", "ff_hml", "ff_smb", "ff_smb_cov_60",}
 
 def _load_keep_factors_from_ml_models() -> set[str]:
     try:

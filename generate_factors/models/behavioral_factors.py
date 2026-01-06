@@ -120,6 +120,7 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     roc_5 = close_safe.groupby(level="code").pct_change(5, fill_method=None)
     roc_10 = close_safe.groupby(level="code").pct_change(10, fill_method=None)
     roc_20 = close_safe.groupby(level="code").pct_change(20, fill_method=None)
+    roc_60 = close_safe.groupby(level="code").pct_change(60, fill_method=None)
     output["roc_5"] = roc_5
     output["roc_10"] = roc_10
     output["roc_20"] = roc_20
@@ -145,6 +146,11 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     output["vol_5"] = vol_5
     output["vol_10"] = vol_10
     output["vol_20"] = vol_20
+
+    sp_ttm = _num_series_any(["SP_ttm", "sp_ttm"])
+    sp_rank = sp_ttm.groupby(level="date", sort=False).rank(pct=True)
+    momo_rank = roc_60.groupby(level="date", sort=False).rank(pct=True)
+    output["f_psg_proxy"] = sp_rank + momo_rank
 
     ma_5 = close_safe.groupby(level="code").transform(lambda x: x.rolling(5, min_periods=5).mean())
     ma_10 = close_safe.groupby(level="code").transform(lambda x: x.rolling(10, min_periods=10).mean())
@@ -194,6 +200,13 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
         .mean()
         .reset_index(level=0, drop=True)
     )
+    amihud_5 = (
+        amihud_daily.groupby(level="code")
+        .rolling(5, min_periods=5)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+    output["f_amihud_trend"] = amihud_5 / (output["f_amihud_liquidity_20"] + 1e-6)
 
     output["f_shadow_skew"] = ((close - low) - (high - close)) / denom_hl
 
@@ -251,14 +264,29 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     if turn_rate is None:
         turn_rate = turnover / (float_market_cap + 1e-6)
 
+    turn_ma5 = turn_rate.groupby(level="code").transform(lambda x: x.rolling(5, min_periods=5).mean())
     turn_ma20 = turn_rate.groupby(level="code").transform(lambda x: x.rolling(20, min_periods=20).mean())
     turn_std20 = turn_rate.groupby(level="code").transform(lambda x: x.rolling(20, min_periods=20).std())
     output["f_turn_stability_20"] = turn_std20 / (turn_ma20 + 1e-6)
 
-    turn_ma40 = turn_rate.groupby(level="code").transform(lambda x: x.rolling(40, min_periods=40).mean())
-    output["f_turn_growth_20_40"] = (turn_ma20 / (turn_ma40 + 1e-6)) - 1.0
+    output["f_turn_acc"] = turn_ma5 / (turn_ma20 + 1e-6)
 
     output["f_abnormal_turn_20"] = (turn_rate - turn_ma20) / (turn_std20 + 1e-6)
+
+    corr_absret_turn_20 = (
+        pd.DataFrame({"a": ret_1.abs(), "t": turn_rate}, index=df.index)
+        .groupby(level="code", sort=False)
+        .apply(lambda g: g["a"].rolling(20, min_periods=20).corr(g["t"]))
+        .reset_index(level=0, drop=True)
+    )
+    absret_std20 = (
+        ret_1.abs()
+        .groupby(level="code", sort=False)
+        .rolling(20, min_periods=20)
+        .std()
+        .reset_index(level=0, drop=True)
+    )
+    output["f_resid_vol"] = absret_std20 * np.sqrt(1.0 - corr_absret_turn_20.pow(2).fillna(0.0).clip(0.0, 1.0))
 
     vol_60 = (
         ret_1.groupby(level="code")
