@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from ml_models.model_functions._07_risk_signals import load_stock_industry_map
+
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -105,6 +107,74 @@ def _list_weight_files(weights_dir: Path) -> list[tuple[pd.Timestamp, Path]]:
         items.append((d, fp))
     items.sort(key=lambda x: x[0])
     return items
+
+
+def compute_monthly_industry_trade_top3_from_weights(
+    *,
+    weights_dir: str,
+    industry_map_path: str | None,
+    top_n: int = 3,
+    eps: float = 1e-12,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    wd = Path(str(weights_dir))
+    files = _list_weight_files(wd)
+    if not files:
+        empty = pd.DataFrame(columns=["month", "side", "rank", "industry", "n_codes"])
+        return empty, empty
+
+    mapper = load_stock_industry_map(str(industry_map_path or "").strip())
+    prev_w = pd.Series(dtype="float64")
+    buy_sets: dict[tuple[str, str], set[str]] = {}
+    sell_sets: dict[tuple[str, str], set[str]] = {}
+
+    for d, fp in files:
+        w = _read_weight_csv(fp)
+        all_codes = w.index.union(prev_w.index)
+        dw = w.reindex(all_codes).fillna(0.0) - prev_w.reindex(all_codes).fillna(0.0)
+        buy_codes = dw[dw > float(eps)].index.astype("string")
+        sell_codes = dw[dw < -float(eps)].index.astype("string")
+
+        month = d.to_period("M").strftime("%Y-%m")
+        for code in buy_codes.tolist():
+            ind = str(mapper.get(str(code), "Unknown") or "Unknown").strip() or "Unknown"
+            buy_sets.setdefault((month, ind), set()).add(str(code))
+        for code in sell_codes.tolist():
+            ind = str(mapper.get(str(code), "Unknown") or "Unknown").strip() or "Unknown"
+            sell_sets.setdefault((month, ind), set()).add(str(code))
+
+        prev_w = w
+
+    rows: list[dict[str, object]] = []
+    for (m, ind), codes in buy_sets.items():
+        rows.append({"month": m, "side": "buy", "industry": ind, "n_codes": int(len(codes))})
+    for (m, ind), codes in sell_sets.items():
+        rows.append({"month": m, "side": "sell", "industry": ind, "n_codes": int(len(codes))})
+    df_long = pd.DataFrame(rows)
+    if df_long.empty:
+        empty = pd.DataFrame(columns=["month", "side", "rank", "industry", "n_codes"])
+        return empty, empty
+
+    df_long["n_codes"] = pd.to_numeric(df_long["n_codes"], errors="coerce").fillna(0).astype(int)
+    df_long["month"] = df_long["month"].astype("string")
+    df_long["side"] = df_long["side"].astype("string")
+    df_long["industry"] = df_long["industry"].astype("string")
+
+    out_rows: list[dict[str, object]] = []
+    for (m, side), sub in df_long.groupby(["month", "side"], sort=True):
+        sub2 = sub.sort_values(["n_codes", "industry"], ascending=[False, True]).head(int(top_n))
+        for r, (_, row) in enumerate(sub2.iterrows(), start=1):
+            out_rows.append(
+                {
+                    "month": str(m),
+                    "side": str(side),
+                    "rank": int(r),
+                    "industry": str(row["industry"]),
+                    "n_codes": int(row["n_codes"]),
+                }
+            )
+    df_top = pd.DataFrame(out_rows).sort_values(["month", "side", "rank"]).reset_index(drop=True)
+    df_long = df_long.sort_values(["month", "side", "n_codes", "industry"], ascending=[True, True, False, True]).reset_index(drop=True)
+    return df_top, df_long
 
 
 def _get_exec_price_series(df_price: pd.DataFrame, *, price_method: str) -> pd.Series:
@@ -1091,6 +1161,7 @@ def _render_html_report(
     initial_capital: float,
     fee_rate: float,
     source_info: dict[str, str],
+    industry_trade_top3: pd.DataFrame | None = None,
     rank_perf_html: str = "",
 ) -> None:
     d0 = pd.to_datetime(df_daily["date"].min()).strftime("%Y%m%d") if not df_daily.empty else ""
@@ -1265,6 +1336,18 @@ def _render_html_report(
         month_cmp = f"<div class='card full-width'><h3>月度收益 vs 基准 (Monthly Return vs Benchmark, latest 24)</h3>{html_tbl}</div>"
     else:
         month_cmp = "<div class='card full-width'><h3>月度收益 vs 基准</h3><div class='muted'>无数据</div></div>"
+
+    industry_trade_html = ""
+    if industry_trade_top3 is not None and (not industry_trade_top3.empty):
+        view = industry_trade_top3.copy()
+        view["rank"] = pd.to_numeric(view["rank"], errors="coerce").fillna(0).astype(int)
+        view["n_codes"] = pd.to_numeric(view["n_codes"], errors="coerce").fillna(0).astype(int)
+        view = view.sort_values(["month", "side", "rank"])
+        industry_trade_html = (
+            "<div class='card full-width'><h3>月度行业交易 Top3（买入/卖出，按涉及股票数）</h3>"
+            + view.to_html(classes="tbl", escape=False, border=0, index=False)
+            + "</div>"
+        )
 
     passive_html = ""
     if "passive_sell_cnt" in df_daily.columns:
@@ -1534,6 +1617,7 @@ def _render_html_report(
   <h2>详细数据表 (Detailed Tables)</h2>
   {win_html}
   {month_cmp}
+  {industry_trade_html}
   {passive_html}
   {rank_perf_html}
 
@@ -1748,6 +1832,17 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
         "撮合模型 (Exec Model)": str(exec_model),
     }
 
+    industry_map_path = str(getattr(args, "industry_map_path", "")).strip()
+    industry_top3, _ = compute_monthly_industry_trade_top3_from_weights(
+        weights_dir=str(weights_dir),
+        industry_map_path=industry_map_path if industry_map_path else None,
+        top_n=3,
+    )
+    if industry_top3 is not None and (not industry_top3.empty):
+        out_csv = paths.out_dir / "monthly_industry_trade_top3.csv"
+        industry_top3.to_csv(out_csv, index=False, encoding="utf-8")
+        logger.info("quick_eval_saved industry_trade_top3=%s", str(out_csv))
+
     _render_html_report(
         paths,
         df_daily=df_daily,
@@ -1759,6 +1854,7 @@ def run_quick_evaluation(*, args, save_dir: str, df_price: pd.DataFrame, logger)
         initial_capital=initial_capital,
         fee_rate=fee_rate,
         source_info=source_info,
+        industry_trade_top3=industry_top3,
         rank_perf_html=rank_perf_html,
     )
 
