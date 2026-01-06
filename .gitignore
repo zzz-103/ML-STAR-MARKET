@@ -24,6 +24,8 @@ generate_factors/models/*
 !generate_factors/models/volume_sentiment.py
 generate_factors/factors_ic_ir_20230101_20241231_h5_20251227_221437.txt
 !generate_factors/factors_summary.txt
+ml_models/diagnose_20230101_20241231_step1_top30_minn300_20260103_213536.txt
+
 
 *.pyc
 .DS_Store

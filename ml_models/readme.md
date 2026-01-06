@@ -42,6 +42,7 @@ ml_models/
     _15_visualization.py      # 可视化绘图 -> (内部库)
     _16_run_params.py         # 参数记录 -> (内部库)
     _17_quick_eval.py         # 快速评估 -> python ml_models/main.py --quick-eval ...
+    _18_factors_quick_review.py # 因子快速回顾 -> (内部库，主流程结束前自动调用)
 ```
 
 ---
@@ -66,6 +67,7 @@ graph TD
   main --> vz[_15_visualization.py]
   main --> ov[_14_overfit.py]
   main --> qe[_17_quick_eval.py]
+  main --> fqr[_18_factors_quick_review.py]
   main --> dg[_13_diagnosis.py]
   dg --> dp
   dg --> fe
@@ -127,6 +129,14 @@ graph TD
 - 目录：`/Users/zhuzhuxia/Documents/SZU_w4/ml_results/factors_importance`
 - 文件：`factor_importance_*.csv / *.meta.json / *.brief.txt`
 - 说明：用最后一个预测日对应训练集拟合一次 XGBoost，输出 gain/weight/cover 以及与标签的 spearman 相关等摘要。
+
+### 4) 因子快速回顾 (Factors Quick Review)
+
+- 文件：`factors_quick_review.txt` (默认在项目根目录或 `output_dir` 下)
+- 说明：主流程结束后自动生成，包含：
+  - 多因子模型分数的年度 IC/IR 统计。
+  - 单因子在回顾区间内的 IC Mean、IR、缺失率、方向性建议（趋势/反转/冲突/弱）。
+  - 按 IC 绝对值与 XGB Gain 排序的因子列表。
 
 ---
 
@@ -336,17 +346,17 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
 
 ### 择时（仓位开关）
 
+- `--timing-method`：择时方法（默认 `index_ma20`）：
+  - `self_eq_ma20`：自算全样本等权指数 close-to-close，做 MA20 风控；信号使用前一交易日（shift(1)）。
+  - `index_ma20`：读取 `risk_data_path` 中指定指数（`--risk-index-code`，如 399006）close 与 MA20 比较；信号 shift(1)。
+  - `index_ma_dual`：读取指定指数 close 的快/慢均线交叉（`--risk-ma-fast-window` vs `--risk-ma-slow-window`）；信号 shift(1)。
+  - `split_index_ma20`：分板块双轨：300 前缀看 `--risk-index-code-300`，688 前缀看 `--risk-index-code-688`（均为 MA20，信号 shift(1)）。
+  - `score`：用 top 分数做阈值/滞回判断 risk_on。
+  - `none`：不择时，永远满仓（scale=1）。
 - `--timing-threshold`：单阈值择时基准（默认 0.0）。
 - `--timing-enter-threshold / --timing-exit-threshold`：双阈值迟滞，避免频繁开平仓。
 - `--timing-hysteresis`：未显式指定 enter 阈值时，enter=exit+hysteresis。
 - `--timing-bad-exposure`：择时关闭时的仓位缩放（例如 0.5 表示半仓；0 表示空仓）。
-- `--timing-method`：择时方法（默认 `self_eq_ma20`）：
-  - `self_eq_ma20`：自算全样本等权指数 close-to-close，做 MA20 风控；信号使用前一交易日（shift(1)）。
-  - `index_ma20`：读取 `risk_data_path` 中指定指数（`--risk-index-code`，如 399006）close 与 MA20 比较；信号 shift(1)。
-  - `index_ma_dual`：读取指定指数 close 的快/慢均线交叉；信号 shift(1)。
-  - `split_index_ma20`：分板块双轨：300 前缀看 `--risk-index-code-300`，688 前缀看 `--risk-index-code-688`（均为 MA20，信号 shift(1)）。
-  - `score`：用 top 分数做阈值/滞回判断 risk_on。
-  - `none`：不择时，永远满仓（scale=1）。
 - `--risk-data-path`：外部指数数据 CSV 路径（供 `index_* / split_index_ma20` 使用）。
 - `--risk-index-code`：单指数方法的指数代码（默认 `self_eq`；当使用 `index_*` 时一般填 `399006`）。
 - `--risk-index-code-300 / --risk-index-code-688`：分板块双轨风控的指数代码（默认 `399006` / `000688`）。
@@ -367,6 +377,8 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
 - `--quick-eval-level`：输出详细程度（0/1/2，默认 1）。
 - `--quick-eval-dir-name`：评估输出目录名（默认 `quick_eval`，输出到 `output_dir/quick_eval/<sub_dir_name>/`）。
 - `--quick-eval-cache / --no-quick-eval-cache`：是否启用增量缓存（默认 true）。
+- `--quick-eval-price`：评估时使用的价格类型，默认 `open`，可选 `vwap`。
+- `--quick-eval-exec-model`：评估成交模型，默认 `limit_aware`（考虑涨跌停），可选 `naive`（简单成交）。
 
 - `--quick-eval-risk-free`：年化无风险利率（用于夏普，默认 0）。
 - `--quick-eval-fee-rate`：单边手续费率（按调仓换手估算双边成本，默认 0.0003）。
