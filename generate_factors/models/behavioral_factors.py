@@ -2,7 +2,13 @@ import numpy as np
 import pandas as pd
 
 
+"""
+行为类因子：基于 OHLCV / 估值等字段，按 (date, code) MultiIndex 计算滚动指标。
+"""
+
+
 def _rolling_trend_r2(series: pd.Series, window: int) -> pd.Series:
+    """滚动线性趋势拟合的 R²（窗口内必须全为有效值）。"""
     s = pd.to_numeric(series, errors="coerce")
     y = s.to_numpy(dtype="float64", copy=True)
     n = int(y.shape[0])
@@ -41,6 +47,7 @@ def _rolling_trend_r2(series: pd.Series, window: int) -> pd.Series:
 
 
 def _rolling_corr_r2(x_series: pd.Series, y_series: pd.Series, window: int) -> pd.Series:
+    """滚动相关系数的平方（窗口内必须 x/y 都有效）。"""
     x = pd.to_numeric(x_series, errors="coerce").to_numpy(dtype="float64", copy=True)
     y = pd.to_numeric(y_series, errors="coerce").to_numpy(dtype="float64", copy=True)
     n = int(x.shape[0])
@@ -88,6 +95,7 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
         return pd.to_numeric(s, errors="coerce")
 
     def _num_series_any(cols: list[str]) -> pd.Series:
+        # 依次尝试多个可能的列名，取第一个“非全空”的数值列
         for c in cols:
             if c in df.columns:
                 s = pd.to_numeric(df[c], errors="coerce")
@@ -111,10 +119,12 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
             .rolling(10)
             .corr(pd.to_numeric(x["volume"], errors="coerce"))
         ).reset_index(level=0, drop=True)
+        # 相关为正时偏“追涨量”，取负号偏向“背离/反向”信号
         output["f_price_vol_corr_10"] = -1.0 * open_vol_corr_10
     else:
         output["f_price_vol_corr_10"] = pd.Series(np.nan, index=df.index)
 
+    # close 为 0 时通常是脏值，避免影响收益率/动量
     close_safe = close.replace(0.0, np.nan)
     ret_1 = close_safe.groupby(level="code").pct_change(fill_method=None)
     roc_5 = close_safe.groupby(level="code").pct_change(5, fill_method=None)
@@ -150,6 +160,7 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     sp_ttm = _num_series_any(["SP_ttm", "sp_ttm"])
     sp_rank = sp_ttm.groupby(level="date", sort=False).rank(pct=True)
     momo_rank = roc_60.groupby(level="date", sort=False).rank(pct=True)
+    # 简单的“成长+动量”代理：销售增速/估值代理的截面分位 + 动量分位
     output["f_psg_proxy"] = sp_rank + momo_rank
 
     ma_5 = close_safe.groupby(level="code").transform(lambda x: x.rolling(5, min_periods=5).mean())
@@ -172,6 +183,7 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
 
     avg_price = turnover / volume.replace(0.0, np.nan)
     avg_price_safe = avg_price.replace(0.0, np.nan)
+    # 收盘价相对成交均价（近似 VWAP）的偏离
     output["f_vwap_bias"] = (close - avg_price_safe) / avg_price_safe
 
     preclose = _num_series("preclose")
@@ -181,6 +193,7 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     preclose_safe = preclose.replace(0.0, np.nan)
     r_night = (open_safe / preclose_safe) - 1.0
     r_day = (close / open_safe) - 1.0
+    # 隔夜与日内收益相乘，用于刻画“高开低走/低开高走”类反转
     output["f_intraday_reversal"] = -1.0 * r_night * r_day
 
     denom_hl = (high - low) + 1e-6
@@ -193,6 +206,7 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     )
     output["f_trend_r2_20"] = trend_r2_20
 
+    # Amihud：|ret| / turnover，越大越“不流动”
     amihud_daily = ret_1.abs() / (turnover + 1e-6)
     output["f_amihud_liquidity_20"] = (
         amihud_daily.groupby(level="code")
@@ -226,6 +240,7 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
         .sum()
         .reset_index(level=0, drop=True)
     )
+    # “聪明钱”强度：偏离 VWAP 的分数按成交量加权累积
     output["f_smart_money_20"] = smart_num / (smart_den + 1e-6)
 
     sm_rank_20 = (
@@ -301,6 +316,7 @@ def run(df: pd.DataFrame) -> pd.DataFrame:
     dates = df.index.get_level_values("date")
     market_ret_by_date = ret_1.groupby(level="date", sort=False).mean()
     market_ret_aligned = pd.Series(market_ret_by_date.reindex(dates).to_numpy(), index=df.index)
+    # 用滚动 R² 估计“市场解释度”，1-R² 作为特质性强弱
     r2_mkt_60 = (
         pd.DataFrame({"x": ret_1, "m": market_ret_aligned}, index=df.index)
         .groupby(level="code", sort=False)

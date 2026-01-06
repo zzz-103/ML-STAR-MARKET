@@ -1,3 +1,8 @@
+"""
+合并股票日频 CSV 到统一表，并支持补充合并若干外部数据源（估值、双创、研发、流通市值等）。
+另外提供 IDX_Idxstk 的快速校验，以及 CSV -> Parquet 转换。
+"""
+
 import argparse
 import csv
 import glob
@@ -14,6 +19,8 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class Columns:
+    """合并输出 CSV 的列集合（保证 date/code 在最前）。"""
+
     names: Tuple[str, ...]
     index: dict
 
@@ -28,6 +35,7 @@ class Columns:
             normalized.append(col)
             seen.add(col)
 
+        # 统一把 date/code 放到最前，其余列按出现顺序保留
         names: List[str] = ["date", "code"]
         names.extend([c for c in normalized if c not in ("date", "code")])
         final_names = tuple(names)
@@ -97,6 +105,8 @@ def merge_stockdata(
     end_date: str,
     max_workers: int,
 ) -> Tuple[int, int]:
+    """合并 input_root/YYYYMMDD/*.csv，输出到单个 CSV（追加 date/code 两列）。"""
+
     first_csv = find_first_csv(input_root, start_date, end_date)
     if not first_csv:
         raise FileNotFoundError(f"no csv found under {input_root} within {start_date}-{end_date}")
@@ -122,6 +132,7 @@ def merge_stockdata(
             days_with_data += 1
 
             with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                # 同一天的不同股票文件并行读，统一写到同一个输出文件
                 for rows in ex.map(lambda p: read_csv_rows(p, day, columns), csv_paths):
                     if not rows:
                         continue
@@ -136,6 +147,8 @@ def csv_to_parquet(
     parquet_path: str,
     compression: str,
 ) -> int:
+    """把合并后的 CSV 转成 Parquet（date/code 作为字符串，其余列按浮点读取）。"""
+
     import pyarrow as pa
     import pyarrow.csv as pacsv
     import pyarrow.parquet as pq
@@ -213,6 +226,8 @@ def validate_idx_idxstk(
     sample_codes: int = 20,
     verbose: bool = True,
 ) -> Dict:
+    """快速校验 IDX_Idxstk：统计日期范围、样本数量，以及按股票前缀的覆盖情况。"""
+
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"csv not found: {csv_path}")
     if not prefixes:
@@ -256,6 +271,7 @@ def validate_idx_idxstk(
             raise ValueError(f"empty csv: {csv_path}")
 
         normalized_first = [_norm_csv_field_name(x) for x in first]
+        # 兼容：有的文件首行是 header，有的首行就是数据
         looks_like_header = (code_col in normalized_first) or (_norm_csv_field_name(code_col) in normalized_first)
         if looks_like_header:
             f.seek(0)
@@ -792,6 +808,8 @@ def load_base_merged_as_df(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> pd.DataFrame:
+    """读取已合并的基表 CSV，并做标准化：date->Timestamp、code->6位字符串、数值列转 float。"""
+
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"base csv not found: {csv_path}")
     df = pd.read_csv(csv_path, dtype=str)
@@ -819,6 +837,7 @@ def load_base_merged_as_df(
     if end_dt is not None:
         df = df[df["date"] <= end_dt]
 
+    # 除 date/code/EndDate 外，尽量转成数值，便于后续 join/筛选/计算
     for c in df.columns:
         if c in ("date", "code", "EndDate"):
             continue
@@ -841,6 +860,8 @@ def load_pt_lcrdspending_asof_df(
     csv_path: str,
     lag_months: int = 4,
 ) -> pd.DataFrame:
+    """读取研发投入表，并生成 available_date（滞后 lag_months + 1 天后可用）。"""
+
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"csv not found: {csv_path}")
     df = pd.read_csv(csv_path, dtype=str)
@@ -883,6 +904,8 @@ def merge_base_csv_with_pt_lcrdspending(
     output_csv_path: str,
     lag_months: int = 4,
 ) -> None:
+    """把研发投入（按 available_date 向后匹配）合并进基表 CSV。"""
+
     if not os.path.exists(base_csv_path):
         raise FileNotFoundError(f"base csv not found: {base_csv_path}")
 
@@ -908,6 +931,7 @@ def merge_base_csv_with_pt_lcrdspending(
     base_valid = base_valid.sort_values(["date_ts", "code_full"])
     rd = rd.sort_values(["available_date", "rd_code"])
 
+    # 取每个交易日可观测到的“最近一期”研发数据（向后匹配）
     merged_valid = pd.merge_asof(
         base_valid,
         rd,
@@ -963,6 +987,8 @@ def _expand_csv_files(values: Sequence[str]) -> List[str]:
 def load_circulated_market_value_as_df(
     csv_inputs: Sequence[str],
 ) -> pd.DataFrame:
+    """读取流通市值数据（大文件按 chunk 读取），输出 date/code/CirculatedMarketValue。"""
+
     paths = _expand_csv_files(csv_inputs)
     if not paths:
         return pd.DataFrame(columns=["date", "code", "CirculatedMarketValue"])
@@ -1037,6 +1063,8 @@ def merge_base_with_idxstk_to_parquet(
     end_date: Optional[str] = None,
     compression: str = "snappy",
 ) -> None:
+    """把基表与指数成分/估值/双创等表按 date/code 左连接后输出 Parquet。"""
+
     base_df = load_base_merged_as_df(
         csv_path=base_csv_path,
         prefixes=prefixes,
@@ -1074,6 +1102,7 @@ def merge_base_with_idxstk_to_parquet(
         overlap = [c for c in val_idx.columns if c in base_idx.columns]
         if overlap:
             val_idx = val_idx.drop(columns=overlap)
+    # 以 base 为主表，其他数据缺失时保留为空（后续需要时再做填充）
     merged = base_idx.join(idx_idx, how="left").join(val_idx, how="left").join(sc_idx, how="left")
     base_cols = [
         "preclose",
@@ -1303,6 +1332,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """命令行入口：按参数执行合并/验证/转换。"""
+
     args = parse_args()
     if args.convert_csv:
         csv_path = args.convert_csv

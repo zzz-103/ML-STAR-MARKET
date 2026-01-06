@@ -46,6 +46,8 @@ if str(PROJECT_ROOT) not in sys.path:
 SUMMARY_PATH = str(Path(__file__).resolve().parent / "factors_summary.txt")
 QUALITY_START = "20230101"
 QUALITY_END = "20241231"
+
+# 评估时不参与质量统计的因子（例如外部基准/派生字段）
 MASKED_FACTORS = {"ff_mkt", "ff_hml", "ff_smb", "ff_smb_cov_60",}
 
 def _load_keep_factors_from_ml_models() -> set[str]:
@@ -61,6 +63,7 @@ def _load_keep_factors_from_ml_models() -> set[str]:
 
 
 KEEP_FACTORS = _load_keep_factors_from_ml_models()
+# 聚焦股票池：默认只看 300/688
 FOCUS_STOCK_POOL_PREFIXES = ("300", "688")
 QUALITY_HORIZON_DAYS = 5
 
@@ -190,6 +193,8 @@ def _prepare_quality_panel(
     if stock_pool_prefixes:
         pool_mask_f = df_f.index.get_level_values("code").astype(str).str.startswith(tuple(stock_pool_prefixes))
         df_f = df_f.loc[pool_mask_f, :]
+
+    # 因子用 T 日数据预测未来收益，统一整体滞后一日，避免“当天收益用到当天因子”
     df_f = df_f.groupby(level="code").shift(1)
 
     df_p = pd.read_parquet(price_parquet_path).sort_index()
@@ -415,13 +420,13 @@ def clean_raw_data(raw_path):
     suffix = split_data[1]
 
     # === 定义白名单规则 (White List) ===
-    # 1. 上证主板 (60) & 科创板 (68) -> 后缀通常是 SSE 或 SH，只要数字对就行
+    # 1. 上证主板 (60) & 科创板 (68) 
     mask_sh = code_num.str.startswith(('60', '68'))
     
-    # 2. 创业板 (30) -> 肯定是深圳
+    # 2. 创业板 (30) 
     mask_cy = code_num.str.startswith('30')
     
-    # 3. 深证主板 (00) -> 必须严格检查后缀，排除上证指数(000001.SSE)
+    # 3. 深证主板 (00) 
     #    逻辑: 开头是 00 且 后缀包含 'SZ'
     mask_sz_main = (code_num.str.startswith('00')) & (suffix.str.contains('SZ'))
     
