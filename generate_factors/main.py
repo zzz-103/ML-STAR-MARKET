@@ -63,7 +63,7 @@ def _load_keep_factors_from_ml_models() -> set[str]:
 
 
 KEEP_FACTORS = _load_keep_factors_from_ml_models()
-# 聚焦股票池：默认只看 300/688
+# 股票池：默认只看 300/688
 FOCUS_STOCK_POOL_PREFIXES = ("300", "688")
 QUALITY_HORIZON_DAYS = 5
 
@@ -381,7 +381,7 @@ def analyze_factor_quality(
 
 def clean_raw_data(raw_path):
     """
-    执行深度清洗：使用【白名单机制】剔除债、基、指数、北交所
+    使用【白名单机制】剔除债、基、指数、北交所
     """
     print(f"[{datetime.now().time()}] 正在读取原始 CSV: {raw_path} ...")
     # 读取时指定 code 为 str，防止 000001 变成 1
@@ -405,7 +405,6 @@ def clean_raw_data(raw_path):
     df['code'] = df['code'].fillna("").astype(str).str.upper()
     
     # 拆分 Code 和 Suffix (例如 "000001.SZSE")
-    # split(n=1) 确保只切分第一个点
     split_data = df['code'].str.split('.', n=1, expand=True)
     
     # 此时: 
