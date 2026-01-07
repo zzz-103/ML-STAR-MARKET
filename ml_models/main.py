@@ -12,7 +12,6 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-# Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
@@ -149,7 +148,7 @@ def _compute_temp_eval(df_ml: pd.DataFrame, temp_dir: str, top_k: int) -> dict[s
         except Exception:
             continue
         y = pd.to_numeric(y_day, errors="coerce").reindex(s.index)
-        # Use concat to align indices safely and avoid unorderable warning
+        # 使用concat安全对齐索引并避免不可排序警告
         df = pd.concat([
             pd.to_numeric(s, errors="coerce").rename("pred")
         ], axis=1, sort=True)
@@ -179,7 +178,7 @@ def run(argv: list[str] | None = None) -> None:
     logger = build_logger(log_dir=log_dir, run_name="xgb_knn_runner")
     log_section(logger, "配置参数 (Config)")
     
-    # Group args for better readability
+    # 对参数进行分组以提高可读性
     arg_dict = vars(args)
     groups = {
         "基础路径 (Paths)": set(cfg.DEFAULT_PATHS.keys()),
@@ -194,7 +193,7 @@ def run(argv: list[str] | None = None) -> None:
         "快速评估 (QuickEval)": set(cfg.DEFAULT_QUICK_EVAL.keys()) | {"quick_eval_only"},
     }
     
-    # Assign args to groups
+    # 将参数分配到组
     grouped_args = {k: {} for k in groups}
     grouped_args["其他参数 (Misc)"] = {}
     
@@ -207,17 +206,14 @@ def run(argv: list[str] | None = None) -> None:
                 
     for k, v in arg_dict.items():
         if k not in assigned_keys:
-            # Special handling for derived or misc args
             grouped_args["其他参数 (Misc)"][k] = v
 
-    # Print relevant groups (skip empty or disabled features if cleaner)
-    # Always show Paths, Training, Model, Portfolio
+    # 打印相关组
     log_data_grid(logger, grouped_args["基础路径 (Paths)"], "基础路径")
     log_data_grid(logger, grouped_args["模型参数 (Model)"], "模型参数")
     log_data_grid(logger, grouped_args["训练设置 (Training)"], "训练设置")
     log_data_grid(logger, grouped_args["组合风控 (Portfolio)"], "组合风控")
     
-    # Show others only if relevant or not empty
     if bool(getattr(args, "diagnose", False)):
         log_data_grid(logger, grouped_args["诊断 (Diagnose)"], "诊断参数")
     if bool(getattr(args, "overfit_check", False)) or bool(getattr(args, "overfit_along", False)):
