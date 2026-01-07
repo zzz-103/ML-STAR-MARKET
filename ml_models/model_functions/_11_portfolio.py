@@ -26,6 +26,10 @@ from ml_models.model_functions._07_risk_signals import (
 
 
 def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price: pd.DataFrame, logger: logging.Logger) -> None:
+    """
+    生成每日持仓：根据预测分数，结合市场择时、行业风控、个股止损等规则，
+    生成最终的每日持仓权重 CSV。
+    """
     objective = str(getattr(args, "xgb_objective", "reg:squarederror"))
     model_kind = "Rank" if objective.startswith("rank:") else "Regression"
     timing_method = str(getattr(args, "timing_method", "score")).lower()
@@ -54,11 +58,14 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
     start_s = os.path.basename(temp_files[0]).replace(".parquet", "")
     end_s = os.path.basename(temp_files[-1]).replace(".parquet", "")
 
+    # 1. 加载大盘择时/风控信号
+    # 根据配置的方法（均线、双均线、自适应等）加载对应的指数或市场数据
     risk_df = None
     risk_df_300 = None
     risk_df_688 = None
     if timing_method in ("index_ma20", "index_ma_dual", "self_eq_ma20", "split_index_ma20"):
         if timing_method == "index_ma20":
+            # 单一指数均线风控（如科创指数跌破20日线则空仓）（默认）
             risk_df = load_index_ma_risk_signal(
                 str(getattr(args, "risk_data_path")),
                 str(getattr(args, "risk_index_code")),
@@ -70,6 +77,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 logger.info("risk_data_missing timing_fallback=none method=index_ma20")
                 timing_method = "none"
         elif timing_method == "index_ma_dual":
+            # 双均线风控（快线穿慢线）【可选】
             risk_df = load_index_dual_ma_risk_signal(
                 str(getattr(args, "risk_data_path")),
                 str(getattr(args, "risk_index_code")),
@@ -82,6 +90,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 logger.info("risk_data_missing timing_fallback=none method=index_ma_dual")
                 timing_method = "none"
         elif timing_method == "self_eq_ma20":
+            # 基于全市场等权指数的均线风控【可选】
             risk_df = load_self_equal_weight_ma_risk_signal(
                 df_price,
                 int(getattr(args, "risk_ma_window")),
@@ -92,6 +101,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 logger.info("risk_data_missing timing_fallback=none method=self_eq_ma20")
                 timing_method = "none"
         else:
+            # 分板风控：例如沪深300和科创50分别判断【可选】
             risk_df_300 = load_index_ma_risk_signal(
                 str(getattr(args, "risk_data_path")),
                 str(getattr(args, "risk_index_code_300", "399006")),
@@ -110,6 +120,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 logger.info("risk_data_missing timing_fallback=none method=split_index_ma20")
                 timing_method = "none"
 
+    # 2. 加载行业相关数据（如果启用行业风控或轮动）
     bull_df = None
     if bool(getattr(args, "industry_bull_enable", False)):
         bull_df = load_index_ma_risk_signal(
@@ -137,6 +148,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             start_dt = pd.to_datetime(start_s, format="%Y%m%d", errors="coerce")
             end_dt = pd.to_datetime(end_s, format="%Y%m%d", errors="coerce")
             if (not pd.isna(start_dt)) and (not pd.isna(end_dt)) and mom_window > 0 and ma_window > 0:
+                # 计算行业动量和均线状态
                 need_days = max(120, int(mom_window * 4), int(ma_window * 4))
                 need_start_dt = (start_dt - pd.Timedelta(days=need_days)).strftime("%Y%m%d")
                 sector_ret = compute_sector_daily_returns(df_price, start_date=need_start_dt, end_date=end_s)
@@ -146,6 +158,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 ma = sector_idx.rolling(window=ma_window, min_periods=ma_window).mean()
                 risk_off = (sector_idx < (ma * (1.0 - riskoff_buf))).astype("float64")
                 industry_risk_off_df = risk_off.shift(1).fillna(0.0).astype("float64")
+                
+                # 行业超跌反弹逻辑（Fast Reversal）
                 if bool(getattr(args, "industry_fast_reversal_enable", False)):
                     turnover_col = None
                     for c in ("turnover_prev", "turnover", "amount", "volume", "vol"):
@@ -199,6 +213,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         if pd.isna(target_date):
             continue
 
+        # 3. 分数平滑处理
+        # 维护一个历史分数列表，计算最近几天的平均分作为最终排序依据
         curr_scores = df_today[["code", "score"]].dropna().drop_duplicates(subset=["code"]).set_index("code")["score"]
         history_scores.append(curr_scores)
         while len(history_scores) > int(getattr(args, "smooth_window")):
@@ -211,6 +227,9 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         ranked_raw = mean_scores.sort_values(ascending=False)
         timing_scale = 1.0
         timing_scale_by_code: pd.Series | None = None
+        
+        # 4. 判断市场择时信号
+        # 如果市场处于高风险（如跌破均线），则降低仓位（timing_scale < 1.0）或清仓
         if timing_method == "none":
             timing_scale = 1.0
         elif timing_method in ("index_ma20", "self_eq_ma20"):
@@ -257,6 +276,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             market_risk_on = risk_on_now
             timing_scale = 1.0 if market_risk_on else float(getattr(args, "timing_bad_exposure", 0.0))
         elif timing_method == "split_index_ma20":
+            # 分板择时逻辑
             buf = float(getattr(args, "risk_ma_buffer", 0.0))
             risk_on_300 = market_risk_on_300
             if risk_df_300 is not None:
@@ -309,6 +329,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 scale.loc[is_688] = float(scale_688)
             timing_scale_by_code = scale
         else:
+            # 默认基于 Top 股票的平均分进行择时
             top_n = min(30, len(ranked_raw))
             top30_mean_score = float(ranked_raw.head(top_n).mean()) if top_n > 0 else np.nan
             exit_thr = getattr(args, "timing_exit_threshold", None)
@@ -342,6 +363,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         band_thr = float(getattr(args, "band_threshold", 0.0))
         band_thr = 0.0 if not np.isfinite(band_thr) else max(0.0, band_thr)
 
+        # 5. 止损逻辑
+        # 如果当前持仓的股票排名大幅下滑（超过 emergency_exit_rank），强制触发调仓
         is_rebalance_day = (days_since_last_trade >= int(getattr(args, "rebalance_period"))) or (len(prev_w) == 0)
         stoploss_set: set[str] = set()
         stoploss_worst_rank = None
@@ -376,6 +399,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             )
             is_rebalance_day = True
 
+        # 6. 非调仓日处理
+        # 如果今天不是调仓日（且没有触发止损），则直接沿用昨天的持仓（可能根据择时信号调整仓位）
         if not is_rebalance_day:
             output_path = os.path.join(save_dir, f"{date_str}.csv")
             if str(getattr(args, "non_rebalance_action", "empty")).lower() == "carry":
@@ -388,6 +413,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             days_since_last_trade += 1
             continue
 
+        # 7. 准备调仓：计算调整后的分数
+        # 减少换手，给昨日持仓的股票加分（inertia_ratio > 1.0）
         adj_scores = ranked_raw.copy()
         if len(prev_w) > 0:
             keep_idx = adj_scores.index.intersection(list(prev_w.index))
@@ -395,6 +422,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                 adj_scores.loc[keep_idx] = adj_scores.loc[keep_idx] * float(getattr(args, "inertia_ratio"))
         ranked_adj_codes = adj_scores.sort_values(ascending=False).index.to_numpy()
 
+        # 8. 准备行业数据（如果启用）
+        # 获取当日的行业动量排名、风控状态（是否处于 Risk-Off）、超跌反弹信号等
         prev_syms = set(prev_w.index.astype(str).tolist())
         industry_rank_row = None
         industry_risk_off_row = None
@@ -422,6 +451,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             except Exception:
                 pass
 
+        # 配置行业配额参数
         strong_pct = float(getattr(args, "industry_rank_strong_pct", 0.2))
         weak_pct = float(getattr(args, "industry_rank_weak_pct", 0.2))
         strong_thr = 1.0 - max(0.0, min(1.0, strong_pct))
@@ -465,6 +495,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             except Exception:
                 return False
 
+        # 根据行业强弱决定个股数量配额
         def _quota(industry: str) -> int:
             if not industry_enabled:
                 return int(getattr(args, "top_k"))
@@ -483,6 +514,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                     return max(0, int(weak_max))
             return max(0, int(neutral_max))
 
+        # 9. 选股核心循环
+        # 优先保留 buffer_k 内的昨日持仓，然后按排名填充空位
         target_selected: list[str] = []
         target_set: set[str] = set()
         industry_count: dict[str, int] = {}
@@ -505,6 +538,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                     continue
                 ind = _industry_of(code)
                 is_new = str(code) not in prev_syms
+                
+                # 行业风控检查：如果行业处于 Risk-Off 状态，根据策略决定是否禁入
                 if industry_enabled and _is_risk_off(ind):
                     if riskoff_policy == "ban_all":
                         continue
@@ -512,6 +547,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                         if not _has_fast_reversal(ind):
                             continue
                         fast_reversal_new_candidates.add(str(code))
+                
+                # 行业配额检查
                 q = _quota(ind)
                 if industry_enabled and int(industry_count.get(ind, 0)) >= int(q):
                     continue
@@ -522,6 +559,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
 
         target_codes = target_selected[: int(getattr(args, "top_k"))]
 
+        # 10. 行业最小覆盖数补足（可选）
+        # 如果选出的股票覆盖行业数不足 min_industries，则强制替换末尾股票以增加行业覆盖
         if industry_enabled and min_industries > 0:
             ind_set = set(_industry_of(c) for c in target_codes)
             if len(ind_set) < min_industries:
@@ -583,6 +622,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
 
                 target_codes = target_selected[: int(getattr(args, "top_k"))]
 
+        # 11. 可交易性检查
+        # 排除当日停牌、涨跌停或流动性不足的股票
         codes_check = set(target_codes) | prev_syms
         buyable = pd.Series(False, index=pd.Index(sorted(codes_check), dtype="string"))
         try:
@@ -617,6 +658,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
         except Exception:
             pass
 
+        # 12. 换手率限制与资金分配
+        # 如果设置了 freeze 策略，则无法买入的旧仓位强制保留
         fixed_force: set[str] = set()
         if str(getattr(args, "limit_policy", "freeze")).lower() == "freeze":
             fixed_force |= {c for c in prev_syms if c in buyable.index and (not bool(buyable.loc[c]))}
@@ -647,22 +690,26 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             buy_candidates = [c for c in buy_candidates if c in buyable.index and bool(buyable.loc[c])]
             buy_keep = buy_candidates[:max_new]
 
+        # 13. 计算新买入股票的权重
         if buy_budget > 0.0 and len(buy_keep) > 0:
             w_buy = pd.Series(
                 float(buy_budget) / len(buy_keep),
                 index=pd.Index(buy_keep, dtype="string"),
                 dtype="float64",
             )
+            # 对超跌反弹股可能降低初始权重（观察期）
             observe_scale = float(getattr(args, "industry_fast_reversal_observe_scale", 1.0))
             observe_scale = 1.0 if not np.isfinite(observe_scale) else max(0.0, observe_scale)
             if observe_scale < 1.0 and len(fast_reversal_new_candidates) > 0 and len(w_buy) > 0:
                 m = w_buy.index.isin(list(fast_reversal_new_candidates))
                 if bool(m.any()):
                     w_buy.loc[m] = (w_buy.loc[m] * observe_scale).astype("float64")
+            # 单票权重上限约束
             max_w = float(getattr(args, "max_w", 1.0))
             if np.isfinite(max_w) and 0 < max_w < 1:
                 w_rel = apply_max_weight_cap(w_buy, max_w / float(buy_budget))
                 w_buy = w_rel * float(buy_budget)
+            # 最小权重过滤
             min_w = float(getattr(args, "min_weight", 0.0))
             min_w = 0.0 if not np.isfinite(min_w) else max(0.0, min_w)
             if min_w > 0:
@@ -674,6 +721,8 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
             if len(w_buy) > 0:
                 w_next = w_buy.copy() if len(w_next) == 0 else pd.concat([w_next, w_buy])
 
+        # 14. 行业权重后处理
+        # 如果行业处于 Risk-Off，则对该行业持仓进行缩减
         w_next = w_next[w_next > 0].astype("float64")
         if industry_enabled and len(w_next) > 0:
             riskoff_scale = float(getattr(args, "industry_riskoff_weight_scale", 1.0))
@@ -704,6 +753,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                     if str(ind) not in riskoff_inds:
                         industry_riskoff_state[str(ind)] = False
 
+            # 行业最大权重上限约束
             max_ind_w = float(getattr(args, "industry_max_weight", 1.0))
             max_ind_w = 1.0 if not np.isfinite(max_ind_w) else max(0.0, max_ind_w)
             cap_today = float(max_ind_w)
@@ -738,6 +788,7 @@ def generate_positions_with_buffer(args, temp_dir: str, save_dir: str, df_price:
                         float(w_after),
                     )
 
+        # 15. 归一化并保存结果
         w_next_sum = float(w_next.sum()) if len(w_next) > 0 else 0.0
         if np.isfinite(w_next_sum) and w_next_sum > 1 + 1e-10:
             w_next = (w_next / w_next_sum).astype("float64")

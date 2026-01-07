@@ -1,6 +1,6 @@
 # 位置: 08（模型训练）| scoring/overfit 调用以拟合 XGBRegressor/XGBRanker
 # 输入: X_train/y_train、objective、xgb 超参、monotone_constraints、sample_weight
-# 输出: xgboost.XGBModel（已 fit）
+# 输出: xgboost.XGBModel
 # 依赖: xgboost/numpy/pandas
 from __future__ import annotations
 

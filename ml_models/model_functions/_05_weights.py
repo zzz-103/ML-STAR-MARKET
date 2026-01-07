@@ -16,7 +16,7 @@ def build_sample_weights(
     half_life_days: int,
     min_weight: float,
 ) -> np.ndarray | None:
-    """按日期衰减生成样本权重；mode=none 时返回 None。"""
+    """按日期衰减生成样本权重；mode=none 时返回 None"""
     mode = str(mode or "none").lower()
     if mode == "none":
         return None
@@ -38,7 +38,7 @@ def build_sample_weights(
 
 
 def apply_max_weight_cap(weights: pd.Series, max_w: float) -> pd.Series:
-    """对权重做单票上限约束并重分配，返回归一化后的相对权重。"""
+    """对权重做单票上限约束并重分配，返回归一化后的相对权重"""
     if len(weights) == 0:
         return weights
     max_w = float(max_w)

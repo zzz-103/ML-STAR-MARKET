@@ -13,7 +13,7 @@ from datetime import datetime
 class ConsoleFormatter(logging.Formatter):
     """
     终端专用格式化器：
-    - INFO 级别：直接输出消息内容（不带时间/级别），保持清爽。
+    - INFO 级别：直接输出消息内容（不带时间/级别）。
     - 其他级别（WARNING/ERROR）：带上 [LEVEL] 前缀以示区分。
     """
     def format(self, record):
@@ -73,7 +73,7 @@ def build_logger(log_dir: str, run_name: str) -> logging.Logger:
 
     file_fmt = FileFormatter()
 
-    # 终端日志：使用自定义精简格式
+    # 终端日志
     console_fmt = ConsoleFormatter()
 
     ch = logging.StreamHandler(sys.stdout)
@@ -99,18 +99,17 @@ def log_section(logger: logging.Logger, title: str) -> None:
 
 def log_data_grid(logger: logging.Logger, data: dict, title: str = "Config") -> None:
     """
-    以紧凑的网格形式输出字典内容，便于快速浏览关键参数。
+    快速浏览关键参数
     """
     if not data:
         return
 
     keys = sorted(data.keys())
-    # Format "key: value" pairs
     items = []
     for k in keys:
         v = data[k]
         s_v = str(v)
-        if len(s_v) > 50:  # Truncate long values
+        if len(s_v) > 50:  
             s_v = s_v[:47] + "..."
         items.append(f"{k}: {s_v}")
 

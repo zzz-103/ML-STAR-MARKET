@@ -9,7 +9,7 @@ from ml_models.model_functions._02_parsing_utils import parse_constraints, parse
 
 
 def build_drop_factors(use_default_drop_factors: bool, drop_factors_csv: str | None) -> set[str]:
-    """构建因子剔除集合（默认 drop list + 命令行追加）。"""
+    """构建因子剔除集合（默认 drop list + 命令行追加）"""
     drop: set[str] = set()
     if bool(use_default_drop_factors):
         drop.update(cfg.DEFAULT_DROP_FACTORS)
@@ -26,7 +26,7 @@ def build_keep_factors(use_default_keep_factors: bool, keep_factors_csv: str | N
 
 
 def apply_feature_filters(features: list[str], drop_factors: set[str], keep_factors: set[str] | None = None) -> list[str]:
-    """对特征列表应用剔除规则（drop list + turnover_* 特殊规则）。"""
+    """对特征列表应用剔除规则（drop list + turnover_* 特殊规则）"""
     out: list[str] = []
     keep = keep_factors or set()
     for f in features:
@@ -44,7 +44,7 @@ def apply_feature_filters(features: list[str], drop_factors: set[str], keep_fact
 
 
 def build_constraints_dict(use_constraints: bool, constraints_csv: str | None) -> dict[str, int]:
-    """构建单调约束字典（默认约束 + 命令行覆盖/追加）。"""
+    """构建单调约束字典（默认约束 + 命令行覆盖/追加）"""
     if not bool(use_constraints):
         return {}
     d = dict(cfg.DEFAULT_MONOTONE_CONSTRAINTS)

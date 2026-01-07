@@ -25,9 +25,16 @@ def compute_factor_importance(
     features: list[str],
     args,
 ) -> tuple[pd.DataFrame, dict] | None:
+    """
+    计算因子重要性：在最后一个预测日之前的一段时间内训练模型，
+    评估各因子对目标的贡献（XGBoost Gain/Weight/Cover）以及线性相关性（Spearman）。
+    """
     if len(predict_dates) == 0:
         return None
 
+    # 1. 确定训练数据的时间窗口
+    # 我们不在预测日当天训练，而是回溯一段时间（train_gap）作为训练结束点，
+    # 再往前推 train_window 天作为训练开始点。
     last_target_date = predict_dates[-1]
     pos = int(all_dates.get_loc(last_target_date))
     train_gap = int(getattr(args, "train_gap", cfg.DEFAULT_TRAINING["train_gap"]))
@@ -40,6 +47,7 @@ def compute_factor_importance(
     if train_floor is not None and train_start_date < train_floor:
         train_start_date = train_floor
 
+    # 2. 准备训练数据
     idx = pd.IndexSlice
     train_data = df_ml.loc[idx[train_start_date:train_end_date, :], :]
     if len(train_data) < 1000:
@@ -48,12 +56,15 @@ def compute_factor_importance(
     X_train = train_data[features]
     y_train = train_data["ret_next"]
 
+    # 3. 构建约束（如单调性约束）
     constraints_dict = build_constraints_dict(
         use_constraints=bool(getattr(args, "use_constraints", True)),
         constraints_csv=getattr(args, "constraints", None),
     )
     monotone_constraints = build_monotone_constraints(features, constraints_dict)
 
+    # 4. 配置并训练 XGBoost 模型
+    # 如果目标是排序（rank:），使用 XGBRanker；否则使用 XGBRegressor。
     objective = str(getattr(args, "xgb_objective", "reg:squarederror"))
     if objective.startswith("rank:"):
         group_sizes = train_data.groupby(level="date", sort=True).size().to_numpy(dtype=np.uint32)
@@ -98,6 +109,8 @@ def compute_factor_importance(
     fit_seconds = float(time.perf_counter() - t0)
     fit_finished_at = datetime.now().isoformat(timespec="seconds")
 
+    # 5. 提取特征重要性
+    # 这里的 gain 是平均增益，weight 是特征在树中出现的次数，cover 是覆盖的样本数
     booster = model.get_booster()
     gain = booster.get_score(importance_type="gain")
     weight = booster.get_score(importance_type="weight")
@@ -110,6 +123,8 @@ def compute_factor_importance(
     df_imp["xgb_weight"] = df_imp["feature"].map(weight).fillna(0.0).astype("float64")
     df_imp["xgb_cover"] = df_imp["feature"].map(cover).fillna(0.0).astype("float64")
 
+    # 6. 计算其他指标：缺失率和 Spearman 相关系数
+    # 为了加快速度，如果数据量太大，只抽样 20 万条计算相关性
     missing_rate = X_train.isna().mean().astype("float64")
     df_imp["missing_rate"] = df_imp["feature"].map(missing_rate).fillna(1.0).astype("float64")
 
@@ -118,6 +133,7 @@ def compute_factor_importance(
     corr = sample[features + ["ret_next"]].corr(method="spearman")["ret_next"].drop(labels=["ret_next"])
     df_imp["spearman_abs"] = df_imp["feature"].map(corr.abs()).fillna(0.0).astype("float64")
 
+    # 综合排序：优先看 XGBoost 的 Gain，其次看 Spearman 相关性
     df_imp = df_imp.sort_values(["xgb_gain", "spearman_abs"], ascending=[False, False]).reset_index(drop=True)
     df_imp["rank"] = np.arange(1, len(df_imp) + 1, dtype=np.int64)
 
@@ -137,6 +153,12 @@ def compute_factor_importance(
 
 
 def save_factor_importance(df_imp: pd.DataFrame, meta: dict, args, logger: logging.Logger) -> tuple[str, str, str]:
+    """
+    保存因子重要性结果：
+    1. 详细 CSV 表
+    2. 元数据 JSON
+    3. 简报 TXT (方便快速查看 Top 因子)
+    """
     out_dir = str(getattr(args, "factors_importance_dir"))
     os.makedirs(out_dir, exist_ok=True)
     d0 = pd.to_datetime(meta["importance_train_start"]).strftime("%Y%m%d")

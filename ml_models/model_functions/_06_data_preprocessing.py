@@ -114,7 +114,7 @@ def _build_dataset_cache_key(args, *, factor_path: str, price_path: str, factor_
 
 
 def prepare_dataset(args, logger: logging.Logger) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """加载因子与价格数据，构建滞后特征，并生成超额收益标签 ret_next。"""
+    """加载因子与价格数据，构建滞后特征，并生成超额收益标签 ret_next"""
     factor_path = str(getattr(args, "factor_data_path"))
     price_path = str(getattr(args, "price_data_path"))
     if not os.path.exists(factor_path):
