@@ -1,4 +1,3 @@
-.trae/
 .venv/
 backtest_results/
 copy/
@@ -7,6 +6,7 @@ frandy_code/
 pre_data/
 ml_results_compare/
 ml_results/
+.trae/
 _debug_drift.py
 StockData_Backup/
 ml_results_smoke/
