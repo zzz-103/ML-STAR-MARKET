@@ -53,4 +53,4 @@ python generate_factors/main.py --summary-only --summary-start-date 20230101 --s
 ## 说明
 
 - 数据与产出路径默认写在各入口脚本顶部的常量里；迁移目录时优先改这些常量或用命令行参数覆盖。
-- 若你希望依赖文件只包含“直接依赖”，需要改为手动维护；当前 `requirement.txt` 记录的是环境实际安装集合（含间接依赖），用于快速复现环境更省事。
+
