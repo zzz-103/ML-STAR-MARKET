@@ -7,13 +7,16 @@
 - `data_preprocess/`：原始 CSV 合并与数据补充（如行业、研发、流通市值等），产出 `pre_data/` 下的清洗/合并结果
 - `generate_factors/`：因子计算与因子质量报告，产出 `factors_data/`
 - `ml_models/`：多因子选股模型（XGBoost 为主），用因子面板训练/打分并输出逐日权重
+- `pre_data/`：存放你的原始数据的地方（需要自行在根目录创建）
+- `ml_results/`：模型权重生成文件，以及快速预览的结果的地方（需要自行在根目录创建）
 - `requirement.txt`：项目运行环境依赖
 
 ## 环境准备
+建议使用虚拟环境
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python3 -m pip install -r requirement.txt
+.venv/bin/python -m pip install -r requirement.txt
 ```
 
 ## 推荐的工作流

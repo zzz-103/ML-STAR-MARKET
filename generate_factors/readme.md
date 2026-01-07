@@ -13,10 +13,11 @@
 强制重跑并覆盖已有输出：
 - python generate_factors/main.py --models ma_factors --force
 
-"""
-python ".../generate_factors/main.py" 
+只生成因子质量汇总（不重算因子文件）：
+```bash
+# 在项目根目录执行
+python generate_factors/main.py \
   --summary-only \
   --summary-start-date 20230101 \
   --summary-end-date 20241231
-  
-"""
+```

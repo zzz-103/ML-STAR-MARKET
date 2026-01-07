@@ -152,13 +152,11 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
   --end-date 20241231 \
   --timing-method index_ma20 \
   --risk-index-code 399006
-  --n-workers 8 \
-  --quick-eval
 ```
 
 说明：
 
-- 默认已启用“自算全样本等权指数 MA20”择时：`--timing-method self_eq_ma20`，并把 `risk_index_code` 设为 `self_eq`（见 `xgb_config.py`）。
+- 默认已启用“399006 MA20”择时：`--timing-method index_ma20`，并把 `risk_index_code` 设为 `399006`（见 `xgb_config.py`）。
 - 该默认择时不依赖外部指数数据（只用 price_data 的全样本 close 计算等权指数与 MA，并使用前一交易日信号，避免同日未来信息）。
 
 如果你希望关闭行业相关逻辑（不做行业配额/行业风控），可以加：
@@ -169,8 +167,6 @@ python "/Users/zhuzhuxia/Documents/SZU_w4/ml_models/main.py" \
   --end-date 20241231 \
   --timing-method index_ma20 \
   --risk-index-code 399006 \
-  --n-workers 8 \
-  --quick-eval \
   --no-industry-enable
 ```
 
